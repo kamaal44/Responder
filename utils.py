@@ -156,6 +156,8 @@ def CreateResponderDb():
 		cursor.close()
 
 def SaveToDb(result):
+	if settings.webview is not None:
+		settings.webview.savetodb(result)
 
 	for k in [ 'module', 'type', 'client', 'hostname', 'user', 'cleartext', 'hash', 'fullhash' ]:
 		if not k in result:
@@ -226,6 +228,8 @@ def SaveToDb(result):
 	cursor.close()
 
 def SavePoisonersToDb(result):
+	if settings.webview is not None:
+		settings.webview.savepoisonerstodb(result)
 
 	for k in [ 'Poisoner', 'SentToIp', 'ForName', 'AnalyzeMode' ]:
 		if not k in result:

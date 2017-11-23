@@ -21,6 +21,7 @@ from SocketServer import TCPServer, UDPServer, ThreadingMixIn
 from threading import Thread
 from utils import *
 import struct
+
 banner()
 
 parser = optparse.OptionParser(usage='python %prog -I eth0 -w -r -f\nor:\npython %prog -I eth0 -wrf', version=settings.__version__, prog=sys.argv[0])
@@ -220,8 +221,16 @@ def serve_thread_SSL(host, port, handler):
 	except:
 		print color("[!] ", 1, 1) + "Error starting SSL server on port " + str(port) + ", check permissions or other servers running."
 
+def runweb():
+	os.environ['RESPONDERWEBMIN'] = '/home/garage/Desktop/Responder/webview_config.py'
+	from responder_webview.responderHandler import ResponderHook
+	settings.webview = ResponderHook()
+	settings.webview.start_webview()
+
+
 def main():
 	try:
+		runweb()
 		threads = []
 
 		# Load (M)DNS, NBNS and LLMNR Poisoners

@@ -27,6 +27,7 @@ class Settings:
 	def __init__(self):
 		self.ResponderPATH = os.path.dirname(__file__)
 		self.Bind_To = '0.0.0.0'
+		self.webview = None
 
 	def __str__(self):
 		ret = 'Settings class:\n'
