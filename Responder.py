@@ -1,314 +1,237 @@
-#!/usr/bin/env python
-# This file is part of Responder, a network take-over set of tools 
-# created and maintained by Laurent Gaffie.
-# email: laurent.gaffie@gmail.com
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-import optparse
-import ssl
+from servers.BASE import ResponderServer, Result, LogEntry
+import socket
+import threading
+import multiprocessing
+import selectors
+import enum
+import logging
+import logging.config
+import logging.handlers
+multiprocessing.freeze_support()
+multiprocessing.allow_connection_pickling()
 
-from SocketServer import TCPServer, UDPServer, ThreadingMixIn
-from threading import Thread
-from utils import *
-import struct
-banner()
+class TaskCmd(enum.Enum):
+	STOP = 0
+	PROCESS = 1
 
-parser = optparse.OptionParser(usage='python %prog -I eth0 -w -r -f\nor:\npython %prog -I eth0 -wrf', version=settings.__version__, prog=sys.argv[0])
-parser.add_option('-A','--analyze',        action="store_true", help="Analyze mode. This option allows you to see NBT-NS, BROWSER, LLMNR requests without responding.", dest="Analyze", default=False)
-parser.add_option('-I','--interface',      action="store",      help="Network interface to use, you can use 'ALL' as a wildcard for all interfaces", dest="Interface", metavar="eth0", default=None)
-parser.add_option('-i','--ip',             action="store",      help="Local IP to use \033[1m\033[31m(only for OSX)\033[0m", dest="OURIP", metavar="10.0.0.21", default=None)
+class Server():
+	def __init__(self, ip, port, handler, settings = None):
+		self.bind_addr = ip
+		self.bind_port = port
+		self.handler   = handler
+		self.settings  = settings
 
-parser.add_option('-e', "--externalip",    action="store",      help="Poison all requests with another IP address than Responder's one.", dest="ExternalIP",  metavar="10.0.0.22", default=None)
+	def getaddr(self):
+		return ((self.bind_addr, self.bind_port))
 
-parser.add_option('-b', '--basic',         action="store_true", help="Return a Basic HTTP authentication. Default: NTLM", dest="Basic", default=False)
-parser.add_option('-r', '--wredir',        action="store_true", help="Enable answers for netbios wredir suffix queries. Answering to wredir will likely break stuff on the network. Default: False", dest="Wredirect", default=False)
-parser.add_option('-d', '--NBTNSdomain',   action="store_true", help="Enable answers for netbios domain suffix queries. Answering to domain suffixes will likely break stuff on the network. Default: False", dest="NBTNSDomain", default=False)
-parser.add_option('-f','--fingerprint',    action="store_true", help="This option allows you to fingerprint a host that issued an NBT-NS or LLMNR query.", dest="Finger", default=False)
-parser.add_option('-w','--wpad',           action="store_true", help="Start the WPAD rogue proxy server. Default value is False", dest="WPAD_On_Off", default=False)
-parser.add_option('-u','--upstream-proxy', action="store",      help="Upstream HTTP proxy used by the rogue WPAD Proxy for outgoing requests (format: host:port)", dest="Upstream_Proxy", default=None)
-parser.add_option('-F','--ForceWpadAuth',  action="store_true", help="Force NTLM/Basic authentication on wpad.dat file retrieval. This may cause a login prompt. Default: False", dest="Force_WPAD_Auth", default=False)
+class Task():
+	def __init__(self, cmd, soc, handler, settings = None):
+		self.cmd     = cmd
+		self.soc     = soc
+		self.handler = handler
+		self.settings  = settings
 
-parser.add_option('-P','--ProxyAuth',       action="store_true", help="Force NTLM (transparently)/Basic (prompt) authentication for the proxy. WPAD doesn't need to be ON. This option is highly effective when combined with -r. Default: False", dest="ProxyAuth_On_Off", default=False)
+class SocketServer(multiprocessing.Process):
+	def __init__(self, severs, processQ, resultQ, stopEvent):
+		multiprocessing.Process.__init__(self)
+		self.servers = servers
+		self.processQ  = processQ
+		self.resultQ   = resultQ
+		self.stopEvent = stopEvent
+		self.sockets = []
+		self.sel     = selectors.DefaultSelector()
+		self.handleLookupDict = {}
 
-parser.add_option('--lm',                  action="store_true", help="Force LM hashing downgrade for Windows XP/2003 and earlier. Default: False", dest="LM_On_Off", default=False)
-parser.add_option('-v','--verbose',        action="store_true", help="Increase verbosity.", dest="Verbose")
-options, args = parser.parse_args()
+	def log(self, level, message):
+		self.resultQ.put(LogEntry(level, self.name, message))
 
-if not os.geteuid() == 0:
-    print color("[!] Responder must be run as root.")
-    sys.exit(-1)
-elif options.OURIP is None and IsOsX() is True:
-    print "\n\033[1m\033[31mOSX detected, -i mandatory option is missing\033[0m\n"
-    parser.print_help()
-    exit(-1)
+	def setup(self):
+		for server in self.servers:
+			if server.bind_port in self.handleLookupDict:
+				self.log(logging.INFO,'ERROR! Multiple server wants to use the same port!!!')
+				return
+			self.handleLookupDict[server.bind_port] = server
+			soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			soc.setblocking(False)
+			soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+			soc.bind(server.getaddr())
+			soc.listen(1000)
+			self.sel.register(soc, selectors.EVENT_READ, self.accept)
 
-settings.init()
-settings.Config.populate(options)
+	def run(self):
+		self.setup()
+		while not self.stopEvent.is_set():
+			events = self.sel.select()
+			for key, mask in events:
+				callback = key.data
+				callback(key.fileobj, mask)
 
-StartupMessage()
+	def accept(self, sock, mask):
+		conn, addr = sock.accept()  # Should be ready
+		self.log(logging.INFO, 'Connection accepted from %s:%d' % (addr),)
+		ip, port = conn.getsockname()
+		if port not in self.handleLookupDict:
+			self.log(logging.INFO,'Error! This is not possible')
+			raise Exception('Got a socket to a port we did not open!')
+		server = self.handleLookupDict[port]
+		handler = type(server.handler())
+		self.processQ.put(Task(TaskCmd.PROCESS, conn, handler, server.settings))
 
-settings.Config.ExpandIPRanges()
 
-if settings.Config.AnalyzeMode:
-	print color('[i] Responder is in analyze mode. No NBT-NS, LLMNR, MDNS requests will be poisoned.', 3, 1)
+class CommProcessor(multiprocessing.Process):
+	def __init__(self, threadCnt, processQ, resultQ, stopEvent):
+		multiprocessing.Process.__init__(self)
+		self.threadCnt = threadCnt
+		self.processQ  = processQ
+		self.resultQ   = resultQ
+		self.stopEvent = stopEvent
 
-#Create the DB, before we start Responder.
-CreateResponderDb()
+		self.processThreads = []
 
-class ThreadingUDPServer(ThreadingMixIn, UDPServer):
-	def server_bind(self):
-		if OsInterfaceIsSupported():
-			try:
-                                if settings.Config.Bind_To_ALL:
-                                	pass
-                                else:
-					self.socket.setsockopt(socket.SOL_SOCKET, 25, settings.Config.Interface+'\0')
-			except:
-				pass
-		UDPServer.server_bind(self)
+	def log(self, level, message):
+		self.resultQ.put(LogEntry(level, self.name, message))
 
-class ThreadingTCPServer(ThreadingMixIn, TCPServer):
-	def server_bind(self):
-		if OsInterfaceIsSupported():
-			try:
-                                if settings.Config.Bind_To_ALL:
-                                	pass
-                                else:
-					self.socket.setsockopt(socket.SOL_SOCKET, 25, settings.Config.Interface+'\0')
-			except:
-				pass
-		TCPServer.server_bind(self)
+	def setup(self):
+		for i in range(self.threadCnt):
+			processThread = threading.Thread(target = self.processorThread, args = ())
+			processThread.daemon = True
+			self.processThreads.append(processThread)
+			processThread.start()
 
-class ThreadingTCPServerAuth(ThreadingMixIn, TCPServer):
-	def server_bind(self):
-		if OsInterfaceIsSupported():
-			try:
-                                if settings.Config.Bind_To_ALL:
-                                	pass
-                                else:
-					self.socket.setsockopt(socket.SOL_SOCKET, 25, settings.Config.Interface+'\0')
-			except:
-				pass
-                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
-		TCPServer.server_bind(self)
+	def run(self):
+		self.log(logging.INFO,'Starting CommProcessor')
+		self.setup()
+		self.log(logging.INFO,'setup done')
+		while not self.stopEvent.is_set():
+			for processThread in self.processThreads:
+				processThread.join()
 
-class ThreadingUDPMDNSServer(ThreadingMixIn, UDPServer):
-	def server_bind(self):
-		MADDR = "224.0.0.251"
+	def processorThread(self):
+		while not self.stopEvent.is_set():
+			task = self.processQ.get()
+			if task.cmd == TaskCmd.STOP:
+				print('Exiting!')
+				return
+
+			elif task.cmd == TaskCmd.PROCESS:
+				self.process(task)
+
+
+	def process(self, task):
+		self.log(logging.INFO,'Processign socket!')
 		
-		self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR, 1)
-		self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-		
-		Join = self.socket.setsockopt(socket.IPPROTO_IP,socket.IP_ADD_MEMBERSHIP, socket.inet_aton(MADDR) + settings.Config.IP_aton)
+		a = task.handler()
+		a.setup(task.soc, self.resultQ, task.settings)
+		a.handle()
 
-		if OsInterfaceIsSupported():
-			try:
-                                if settings.Config.Bind_To_ALL:
-                                	pass
-                                else:
-					self.socket.setsockopt(socket.SOL_SOCKET, 25, settings.Config.Interface+'\0')
-			except:
-				pass
-		UDPServer.server_bind(self)
+class LogProcessor(multiprocessing.Process):
+	def __init__(self, logsettings, resultQ, stopEvent):
+		multiprocessing.Process.__init__(self)
+		self.resultQ     = resultQ
+		self.stopEvent   = stopEvent
+		self.logsettings = logsettings
 
-class ThreadingUDPLLMNRServer(ThreadingMixIn, UDPServer):
-	def server_bind(self):
-		MADDR = "224.0.0.252"
-		self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-		self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-		
-		Join = self.socket.setsockopt(socket.IPPROTO_IP,socket.IP_ADD_MEMBERSHIP,socket.inet_aton(MADDR) + settings.Config.IP_aton)
-		
-		if OsInterfaceIsSupported():
-			try:
-                                if settings.Config.Bind_To_ALL:
-                                	pass
-                                else:
-					self.socket.setsockopt(socket.SOL_SOCKET, 25, settings.Config.Interface+'\0')
-			except:
-				pass
-		UDPServer.server_bind(self)
+		self.logger = None
 
-ThreadingUDPServer.allow_reuse_address = 1
-ThreadingTCPServer.allow_reuse_address = 1
-ThreadingUDPMDNSServer.allow_reuse_address = 1
-ThreadingUDPLLMNRServer.allow_reuse_address = 1
-ThreadingTCPServerAuth.allow_reuse_address = 1
+	def log(self, level, message):
+		self.handleLog(LogEntry(level, self.name, message))
 
-def serve_thread_udp_broadcast(host, port, handler):
-	try:
-		server = ThreadingUDPServer((host, port), handler)
-		server.serve_forever()
-	except:
-		print color("[!] ", 1, 1) + "Error starting UDP server on port " + str(port) + ", check permissions or other servers running."
+	def setup(self):
+		#TODO do proper log settings
+		#self.logger = logging.getLogger(__name__)
+		#self.logger.setLevel(logging.DEBUG)
+		logging.config.dictConfig(self.logsettings)
 
-def serve_NBTNS_poisoner(host, port, handler):
-	serve_thread_udp_broadcast(host, port, handler)
 
-def serve_MDNS_poisoner(host, port, handler):
-	try:
-		server = ThreadingUDPMDNSServer((host, port), handler)
-		server.serve_forever()
-	except:
-		print color("[!] ", 1, 1) + "Error starting UDP server on port " + str(port) + ", check permissions or other servers running."
 
-def serve_LLMNR_poisoner(host, port, handler):
-	try:
-		server = ThreadingUDPLLMNRServer((host, port), handler)
-		server.serve_forever()
-	except:
-                raise
-		print color("[!] ", 1, 1) + "Error starting UDP server on port " + str(port) + ", check permissions or other servers running."
 
-def serve_thread_udp(host, port, handler):
-	try:
-		if OsInterfaceIsSupported():
-			server = ThreadingUDPServer((host, port), handler)
-			server.serve_forever()
-		else:
-			server = ThreadingUDPServer((host, port), handler)
-			server.serve_forever()
-	except:
-		print color("[!] ", 1, 1) + "Error starting UDP server on port " + str(port) + ", check permissions or other servers running."
-
-def serve_thread_tcp(host, port, handler):
-	try:
-		if OsInterfaceIsSupported():
-			server = ThreadingTCPServer((host, port), handler)
-			server.serve_forever()
-		else:
-			server = ThreadingTCPServer((host, port), handler)
-			server.serve_forever()
-	except:
-		print color("[!] ", 1, 1) + "Error starting TCP server on port " + str(port) + ", check permissions or other servers running."
-
-def serve_thread_tcp_auth(host, port, handler):
-	try:
-		if OsInterfaceIsSupported():
-			server = ThreadingTCPServerAuth((host, port), handler)
-			server.serve_forever()
-		else:
-			server = ThreadingTCPServerAuth((host, port), handler)
-			server.serve_forever()
-	except:
-		print color("[!] ", 1, 1) + "Error starting TCP server on port " + str(port) + ", check permissions or other servers running."
-
-def serve_thread_SSL(host, port, handler):
-	try:
-
-		cert = os.path.join(settings.Config.ResponderPATH, settings.Config.SSLCert)
-		key =  os.path.join(settings.Config.ResponderPATH, settings.Config.SSLKey)
-
-		if OsInterfaceIsSupported():
-			server = ThreadingTCPServer((host, port), handler)
-			server.socket = ssl.wrap_socket(server.socket, certfile=cert, keyfile=key, server_side=True)
-			server.serve_forever()
-		else:
-			server = ThreadingTCPServer((host, port), handler)
-			server.socket = ssl.wrap_socket(server.socket, certfile=cert, keyfile=key, server_side=True)
-			server.serve_forever()
-	except:
-		print color("[!] ", 1, 1) + "Error starting SSL server on port " + str(port) + ", check permissions or other servers running."
-
-def main():
-	try:
-		threads = []
-
-		# Load (M)DNS, NBNS and LLMNR Poisoners
-		from poisoners.LLMNR import LLMNR
-		from poisoners.NBTNS import NBTNS
-		from poisoners.MDNS import MDNS
-		threads.append(Thread(target=serve_LLMNR_poisoner, args=('', 5355, LLMNR,)))
-		threads.append(Thread(target=serve_MDNS_poisoner,  args=('', 5353, MDNS,)))
-		threads.append(Thread(target=serve_NBTNS_poisoner, args=('', 137,  NBTNS,)))
-
-		# Load Browser Listener
-		from servers.Browser import Browser
-		threads.append(Thread(target=serve_thread_udp_broadcast, args=('', 138,  Browser,)))
-
-		if settings.Config.HTTP_On_Off:
-			from servers.HTTP import HTTP
-			threads.append(Thread(target=serve_thread_tcp, args=('', 80, HTTP,)))
-
-		if settings.Config.SSL_On_Off:
-			from servers.HTTP import HTTP
-			threads.append(Thread(target=serve_thread_SSL, args=('', 443, HTTP,)))
-
-		if settings.Config.WPAD_On_Off:
-			from servers.HTTP_Proxy import HTTP_Proxy
-			threads.append(Thread(target=serve_thread_tcp, args=('', 3141, HTTP_Proxy,)))
-
-		if settings.Config.ProxyAuth_On_Off:
-		        from servers.Proxy_Auth import Proxy_Auth
-		        threads.append(Thread(target=serve_thread_tcp_auth, args=('', 3128, Proxy_Auth,)))
-
-		if settings.Config.SMB_On_Off:
-			if settings.Config.LM_On_Off:
-				from servers.SMB import SMB1LM
-				threads.append(Thread(target=serve_thread_tcp, args=('', 445, SMB1LM,)))
-				threads.append(Thread(target=serve_thread_tcp, args=('', 139, SMB1LM,)))
+	def run(self):
+		self.setup()		
+		self.log(logging.INFO,'setup done')
+		while not self.stopEvent.is_set():
+			resultObj = self.resultQ.get()
+			if isinstance(resultObj, Result):
+				self.handleResult(resultObj)
+			elif isinstance(resultObj, LogEntry):
+				self.handleLog(resultObj)
 			else:
-				from servers.SMB import SMB1
-				threads.append(Thread(target=serve_thread_tcp, args=('', 445, SMB1,)))
-				threads.append(Thread(target=serve_thread_tcp, args=('', 139, SMB1,)))
+				raise Exception('Unknown object in queue!')
 
-		if settings.Config.Krb_On_Off:
-			from servers.Kerberos import KerbTCP, KerbUDP
-			threads.append(Thread(target=serve_thread_udp, args=('', 88, KerbUDP,)))
-			threads.append(Thread(target=serve_thread_tcp, args=('', 88, KerbTCP,)))
+	def handleLog(self, log):
+		logging.log(log.level, str(log))
 
-		if settings.Config.SQL_On_Off:
-			from servers.MSSQL import MSSQL, MSSQLBrowser
-			threads.append(Thread(target=serve_thread_tcp, args=('', 1433, MSSQL,)))
-			threads.append(Thread(target=serve_thread_udp_broadcast, args=('', 1434, MSSQLBrowser,)))
+	def handleResult(self, result):
+		print(result.d)
 
-		if settings.Config.FTP_On_Off:
-			from servers.FTP import FTP
-			threads.append(Thread(target=serve_thread_tcp, args=('', 21, FTP,)))
-
-		if settings.Config.POP_On_Off:
-			from servers.POP3 import POP3
-			threads.append(Thread(target=serve_thread_tcp, args=('', 110, POP3,)))
-
-		if settings.Config.LDAP_On_Off:
-			from servers.LDAP import LDAP
-			threads.append(Thread(target=serve_thread_tcp, args=('', 389, LDAP,)))
-
-		if settings.Config.SMTP_On_Off:
-			from servers.SMTP import ESMTP
-			threads.append(Thread(target=serve_thread_tcp, args=('', 25,  ESMTP,)))
-			threads.append(Thread(target=serve_thread_tcp, args=('', 587, ESMTP,)))
-
-		if settings.Config.IMAP_On_Off:
-			from servers.IMAP import IMAP
-			threads.append(Thread(target=serve_thread_tcp, args=('', 143, IMAP,)))
-
-		if settings.Config.DNS_On_Off:
-			from servers.DNS import DNS, DNSTCP
-			threads.append(Thread(target=serve_thread_udp, args=('', 53, DNS,)))
-			threads.append(Thread(target=serve_thread_tcp, args=('', 53, DNSTCP,)))
-
-		for thread in threads:
-			thread.setDaemon(True)
-			thread.start()
-
-		print color('[+]', 2, 1) + " Listening for events..."
-
-		while True:
-			time.sleep(1)
-
-	except KeyboardInterrupt:
-		sys.exit("\r%s Exiting..." % color('[+]', 2, 1))
 
 if __name__ == '__main__':
-	main()
+	import time
+	from servers.FTP3 import FTP
+	from servers.HTTP3 import HTTP
+
+	bind_ip = ''
+
+	logsettings = {
+		'version': 1,
+		'formatters': {
+			'detailed': {
+				'class': 'logging.Formatter',
+					'format': '%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s'
+			}
+		},
+		'handlers': {
+			'console': {
+				'class': 'logging.StreamHandler',
+				'level': 'DEBUG',
+			}
+		},
+		'root': {
+			'level': 'DEBUG',
+			'handlers': ['console']
+		}
+	}
+
+	httpsettings = {
+		'Force_WPAD_Auth': False,
+		'WPAD_Script': '',
+		'NumChal' : "random",
+		'Challenge' : '',
+		'Serve_Always': False,
+		'Serve_Exe': False,
+		'Serve_Html': False,
+		'Html_Filename': '',
+		'Exe_Filename': '',
+		'Exe_DlName': '',
+		'Force_WPAD_Auth': False,
+		'HtmlToInject': 'aaaa',
+		'Basic' : False
+
+	}
+
+	threadCnt = 10
+	severs    = []
+	processQ  = multiprocessing.Queue()
+	resultQ   = multiprocessing.Queue()
+	stopEvent = multiprocessing.Event()
+
+	lp = LogProcessor(logsettings, resultQ, stopEvent)
+	lp.daemon = True
+	lp.start()
+	
+
+	ftpserver = Server(bind_ip, 21, FTP)
+	httpserver = Server(bind_ip, 80, HTTP, httpsettings)
+	
+	servers = [ftpserver, httpserver]
+
+	cp = CommProcessor(threadCnt, processQ, resultQ, stopEvent)
+	cp.daemon = True
+	cp.start()
+
+	ss = SocketServer(severs, processQ, resultQ, stopEvent)
+	ss.daemon = True
+	ss.start()
+
+	print('Started everything!')
+	ss.join()
+

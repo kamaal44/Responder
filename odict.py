@@ -14,9 +14,9 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-from UserDict import DictMixin
+import collections
 
-class OrderedDict(dict, DictMixin):
+class OrderedDict(dict, collections.MutableMapping):
 
     def __init__(self, *args, **kwds):
         if len(args) > 1:
@@ -83,14 +83,20 @@ class OrderedDict(dict, DictMixin):
     def keys(self):
         return list(self)
 
-    setdefault = DictMixin.setdefault
-    update = DictMixin.update
-    pop = DictMixin.pop
-    values = DictMixin.values
-    items = DictMixin.items
-    iterkeys = DictMixin.iterkeys
-    itervalues = DictMixin.itervalues
-    iteritems = DictMixin.iteritems
+    def itervalues(self):
+        return iter(self.values())
+
+    def iteritems(self):
+        return iter(self.items())
+
+    def iterkeys(self):
+        return iter(self)
+
+    setdefault = collections.MutableMapping.setdefault
+    update = collections.MutableMapping.update
+    pop = collections.MutableMapping.pop
+    values = collections.MutableMapping.values
+    items = collections.MutableMapping.items
 
     def __repr__(self):
         if not self:

