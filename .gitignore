@@ -1,4 +1,5 @@
 # Responder logs
+*.sqlite
 *.db
 *.txt
 *.log

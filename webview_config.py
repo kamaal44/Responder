@@ -1,6 +1,6 @@
 
 ###### DB CONFIG
-sqlite_file = '/home/garage/Desktop/Responder/scans.sqlite'
+sqlite_file = 'scans.sqlite' #add full path to sqlite file here
 print(sqlite_file)
 SQLALCHEMY_DATABASE_URI = 'sqlite:///' + sqlite_file.replace('\\','\\\\')
 SQLALCHEMY_TRACK_MODIFICATIONS = False
