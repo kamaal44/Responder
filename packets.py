@@ -62,22 +62,22 @@ class NTLM_Challenge(Packet):
 		("TargetInfoMaxLen", b"\x7e\x00"),
 		("TargetInfoOffset", b"\x3e\x00\x00\x00"),
 		("NTLMOsVersion",    b"\x05\x02\xce\x0e\x00\x00\x00\x0f"),
-		("TargetNameStr",    b"SMB"),
+		("TargetNameStr",    "SMB".encode('utf-16')),
 		("Av1",              b"\x02\x00"),#nbt name
 		("Av1Len",           b"\x06\x00"),
-		("Av1Str",           b"SMB"),
+		("Av1Str",           "SMB".encode('utf-16')),
 		("Av2",              b"\x01\x00"),#Server name
 		("Av2Len",           b"\x14\x00"),
-		("Av2Str",           b"SMB-TOOLKIT"),
+		("Av2Str",           "SMB-TOOLKIT".encode('utf-16')),
 		("Av3",              b"\x04\x00"),#Full Domain name
 		("Av3Len",           b"\x12\x00"),
-		("Av3Str",           b"smb.local"),
+		("Av3Str",           "smb.local".encode('utf-16')),
 		("Av4",              b"\x03\x00"),#Full machine domain name
 		("Av4Len",           b"\x28\x00"),
-		("Av4Str",           b"server2003.smb.local"),
+		("Av4Str",           "server2003.smb.local".encode('utf-16')),
 		("Av5",              b"\x05\x00"),#Domain Forest Name
 		("Av5Len",           b"\x12\x00"),
-		("Av5Str",           b"smb.local"),
+		("Av5Str",           "smb.local".encode('utf-16')),
 		("Av6",              b"\x00\x00"),#AvPairs Terminator
 		("Av6Len",           b"\x00\x00"),
 	])

@@ -102,8 +102,10 @@ class LogProcessor(multiprocessing.Process):
 			if self.logsettings['webview']['useDB'] or self.logsettings['webview']['useWeb']:
 				from responder_webview.responderHandler import ResponderHook
 				webview = ResponderHook()
+
+			if self.logsettings['webview']['useDB']:
 				self.resultHandlers.append(webview.savetodb)
-	
+
 			if self.logsettings['webview']['useWeb']:
 				webview.start_webview()
 

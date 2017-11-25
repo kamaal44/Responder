@@ -67,6 +67,11 @@ class HTTPAuthorization():
 		self.type = t[:marker]
 		self.data = t[marker+1:]
 
+	def toDict(self):
+		t = {}
+		t['type'] = self.type
+		t['data'] = self.data
+		return t
 
 class HTTPReq():
 	"""
@@ -120,8 +125,28 @@ class HTTPReq():
 			self.authorization = HTTPAuthorization()
 			self.authorization.parse(self.headers['authorization'])
 
+	def toDict(self):
+		t = {}
+		t['method'] = self.method
+		t['uri'] = self.uri
+		t['version'] = self.version
+		t['headers'] = self.headers
+		t['authorization'] = self.authorization
+		if t['authorization'] is not None:
+			t['authorization'] = self.authorization.toDict()
+
+		t['isWebDAV'] = self.isWebDAV
+		t['isFirefox'] =  self.isFirefox
+		t['isWpad'] = self.isWpad
+		return t
+	def toJSON(self):
+		return json.dumps(self.toDict())
+
 	def __str__(self):
-		return 'Method: %s , URL: %s, Version: %s' % (self.method, self.uri, self.version)
+		return self.toJSON()
+
+
+
 
 class HTTP(ResponderServer):
 	def __init__(self):
@@ -144,19 +169,24 @@ class HTTP(ResponderServer):
 		self.log(logging.DEBUG, 'Handling request %s' % str(request))
 
 		try:
-			if request.isFirefox and request.isWpad:
-				self.log(logging.INFO,"WARNING! Mozilla doesn't switch to fail-over proxies (as it should) when one's failing.")
-				self.log(logging.INFO,"WARNING! The current WPAD script will cause disruption on this host. Sending a dummy wpad script (DIRECT connect)")
+			if request.isWpad:
+				if request.isFirefox:
+					self.log(logging.INFO,"WARNING! Mozilla doesn't switch to fail-over proxies (as it should) when one's failing.")
+					self.log(logging.INFO,"WARNING! The current WPAD script will cause disruption on this host. Sending a dummy wpad script (DIRECT connect)")
 
-			Buffer = self.WpadCustom(request)
-			
-			if Buffer and self.settings['Force_WPAD_Auth'] == False:
-				transport.write(Buffer)
-				self.log(logging.ERROR, 'WPAD (no auth) file sent')
+
+				Buffer = self.WpadCustom(request)
+
+				if self.settings['Force_WPAD_Auth'] == False:
+					transport.write(Buffer)
+					self.log(logging.ERROR, 'WPAD (no auth) file sent')
+					return
 			else:
 				Buffer = self.PacketSequence(request, transport)
+				self.log(logging.DEBUG, 'Response: ' + Buffer.decode())
 				transport.write(Buffer)
-		
+				return
+
 		except Exception as e:
 			self.log(logging.INFO,'Exception! %s' % (str(e),))
 			traceback.print_exc()
@@ -207,12 +237,15 @@ class HTTP(ResponderServer):
 		if request.authorization is not None:
 			if request.authorization.type == 'NTLM':
 
-			
+
 				Packet_NTLM = b64decode(''.join(request.authorization.data))[8:9]
 				self.log(logging.DEBUG,"Challenge 2: %s" % self.challenge.hex())
 				if Packet_NTLM == b"\x01":
+
+					#Buffer = NTLM_Challenge(ServerChallenge=self.challenge, TargetNameStr = b'SMB', Av3Str=b'56k.io', Av4Str=b'creds.56k.io',Av5Str=b'56k.io')
 					Buffer = NTLM_Challenge(ServerChallenge=self.challenge)
 					Buffer.calculate()
+					print(repr(Buffer.getdata()))
 
 					Buffer_Ans = IIS_NTLM_Challenge_Ans()
 					Buffer_Ans.calculate(Buffer.getdata())
@@ -235,13 +268,13 @@ class HTTP(ResponderServer):
 					return Buffer.getdata()
 
 			elif request.authorization.type == 'Basic':
-				ClearText_Auth = b64decode(''.join(request.authorization.data))
+				ClearText_Auth = b64decode(''.join(request.authorization.data)).decode()
 				#log http req?
 
 				self.logResult({
 					'module': 'HTTP', 
 					'type': 'Basic', 
-					'client': self.soc.getpeername()[0], 
+					'client': self.peername, 
 					'user': ClearText_Auth.split(':')[0], 
 					'cleartext': ClearText_Auth.split(':')[1], 
 				})
@@ -265,7 +298,7 @@ class HTTP(ResponderServer):
 			return Response.getdata()
 
 	def RespondWithFile(self, filename, dlname=None):
-		
+
 		if filename.endswith('.exe'):
 			Buffer = ServeExeFile(Payload = self.ServeFile(filename), ContentDiFile=dlname)
 		else:
@@ -275,18 +308,18 @@ class HTTP(ResponderServer):
 		self.log(logging.INFO, "Sending file %s to %s" % (filename, self.client))
 		return Buffer.getdata()
 
-	
+
 	# Parse NTLMv1/v2 hash.
 	#data, Challenge, client, module
 	def ParseHTTPHash(self, data, module):
 		LMhashLen    = struct.unpack('<H',data[12:14])[0]
 		LMhashOffset = struct.unpack('<H',data[16:18])[0]
 		LMHash       = data[LMhashOffset:LMhashOffset+LMhashLen].hex().upper()
-		
+
 		NthashLen    = struct.unpack('<H',data[20:22])[0]
 		NthashOffset = struct.unpack('<H',data[24:26])[0]
 		NTHash       = data[NthashOffset:NthashOffset+NthashLen].hex().upper()
-		
+
 		UserLen      = struct.unpack('<H',data[36:38])[0]
 		UserOffset   = struct.unpack('<H',data[40:42])[0]
 		User         = data[UserOffset:UserOffset+UserLen].replace(b'\x00',b'').decode()
@@ -315,7 +348,7 @@ class HTTP(ResponderServer):
 			HostNameOffset = struct.unpack('<H',data[48:50])[0]
 			HostName       = data[HostNameOffset:HostNameOffset+HostNameLen].replace(b'\x00',b'').decode()
 			WriteHash      = '%s::%s:%s:%s:%s' % (User, Domain, self.challenge.hex(), NTHash[:32], NTHash[32:])
-	                 
+ 
 			self.logResult({
 				'module': module, 
 				'type': 'NTLMv2', 
@@ -336,7 +369,7 @@ class HTTPS(HTTP):
 		return 'HTTPS'
 
 	def run(self, ssl_context):
-		
+
 		coro = self.loop.create_server(
 							protocol_factory=lambda: HTTPProtocol(self),
 							host="",

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 if __name__ == '__main__':
+	import copy
 	import os
 	import time
 	from pathlib import Path
@@ -19,9 +20,9 @@ if __name__ == '__main__':
 
 	logsettings = {
 		'webview' : {
-			'settings_file': str(basedir.joinpath('webview_config.py').resolve()),
+			'settings_file': '/var/www/responder-webview/config.py',
 			'useDB':True, 
-			'useWeb':True
+			'useWeb':False
 		},
 		'log' : {
 			'version': 1,
@@ -63,9 +64,12 @@ if __name__ == '__main__':
 
 	sslsettings = {
 		'ciphers'  : 'ALL',
-		'certfile' : '/home/garage/Desktop/Responder-asyncio/certs/responder.crt',
-		'keyfile'  : '/home/garage/Desktop/Responder-asyncio/certs/responder.key'
+		'certfile' : '/etc/letsencrypt/live/creds.56k.io/fullchain.pem',
+		'keyfile'  : '/etc/letsencrypt/live/creds.56k.io/privkey.pem'
 	}
+
+	httpsettings2 = copy.deepcopy(httpsettings)
+	httpsettings2['Basic'] = True
 
 	httpssettings = httpsettings
 	httpssettings['SSL'] = sslsettings
@@ -82,6 +86,8 @@ if __name__ == '__main__':
 	servers.append(ftpserver)
 	httpserver = Server('', 80, HTTP, settings = httpsettings)
 	servers.append(httpserver)
+	httpserver2 = Server('', 81, HTTP, settings = httpsettings2)
+	servers.append(httpserver2)
 	httpsserver = Server('', 443, HTTPS, proto = ServerProtocol.SSL, settings = httpssettings)
 	servers.append(httpsserver)
 
