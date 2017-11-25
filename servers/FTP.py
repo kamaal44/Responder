@@ -1,74 +1,112 @@
 import logging
 import traceback
-from servers.BASE import ResponderServer, Result, LogEntry
-from packets3 import FTPPacket
-
-
+from servers.BASE import ResponderServer, ResponderProtocolTCP
+from packets import FTPPacket
 
 class FTP(ResponderServer):
+	def __init__(self):
+		ResponderServer.__init__(self)
+		self.curstate = 0
+		self.User = None
+		self.Pass = None
+
+
 	def modulename(self):
 		return 'FTP'
 
-	def handle(self):
+	def run(self):
+
+		coro = self.loop.create_server(
+							protocol_factory=lambda: FTPProtocol(self),
+							host="",
+							port=self.port
+		)
+
+		return self.loop.run_until_complete(coro)
+
+	def modulename(self):
+		return 'FTP'
+
+	def handle(self, data, transport):
 		try:
-			self.send(FTPPacket().getdata())
-			data = self.recv()
+			self.log(logging.DEBUG,'Handle called with data: ' + str(data))
+			if self.curstate == 0:
+				#send welcome msg
+				transport.write(FTPPacket().getdata())
+				self.curstate = 1
+				return
+			
+			elif self.curstate == 1:
+				#check if user is sent
+				if data[0:4] == "USER":
+					self.User = data[5:].strip()
 
-			if data[0:4] == b"USER":
-				User = data[5:].strip().decode()
+					Packet = FTPPacket(Code=b"331",Message=b"User name okay, need password.")
+					transport.write(Packet.getdata())
+					self.curstate = 2
+					return
+				else:
+					self.cmderr(transport)
 
-				Packet = FTPPacket(Code=b"331",Message=b"User name okay, need password.")
-				self.send(Packet.getdata())
-				data = self.recv()
+			elif self.curstate == 2:
+				#check if password is sent
+				if data[0:4] == "PASS":
+					self.Pass = data[5:].strip()
 
-			if data[0:4] == b"PASS":
-				Pass = data[5:].strip().decode()
+					self.logResult({
+						'module': self.modulename(), 
+						'type': 'Cleartext', 
+						'client': self.peername, 
+						'user': self.User, 
+						'cleartext': self.Pass, 
+						'fullhash': self.User + ':' + self.Pass
+					})
 
-				Packet = FTPPacket(Code=b"530",Message=b"User not logged in.")
-				self.send(Packet.getdata())
-				
+					Packet = FTPPacket(Code=b"530",Message=b"User not logged in.")
+					transport.write(Packet.getdata())
+					self.curstate = 3
 
-				self.logResult({
-					'module': 'FTP', 
-					'type': 'Cleartext', 
-					'client': self.soc.getpeername()[0], 
-					'user': User, 
-					'cleartext': Pass, 
-					'fullhash': User + ':' + Pass
-				})
+				else:
+					self.cmderr(transport)
 
-				data = self.recv()
-
+			elif self.curstate == 3:
+				self.cmderr(transport)
+	
 			else:
-				Packet = FTPPacket(Code=b"502",Message=b"Command not implemented.")
-				self.send(Packet.getdata())
-				data = self.recv()
+				self.curstate = 3
+				
 
 		except Exception as e:
 			self.log(logging.INFO,'Exception! %s' % (str(e),))
 			pass
 
-		finally:
-			self.soc.close()
+	def cmderr(self, transport):
+		Packet = FTPPacket(Code=b"502",Message=b"Command not implemented.")
+		transport.write(Packet.getdata())
+		transport.close()
 
-	def send(self, data):
-		self.soc.sendall(data)
 
-	def recv(self):
-		"""
-		incorrect buffering, but works for capturing logon creds
-		"""
-		maxdata = 5 * 1024
-		buff = b''
-		while True:
-			t = self.soc.recv(1024)
-			if t == b'':
-				break
-			buff += t
-			if len(buff) > maxdata:
-				break
-			if buff.find(b'\r\n') != -1:
-				break
+class FTPProtocol(ResponderProtocolTCP):
+	
+	def __init__(self, server):
+		ResponderProtocolTCP.__init__(self, server)
+		self._buffer_maxsize = 1*1024
 
-		return buff
+	def _connection_made(self, transport):
+		self._server.curstate = 0
+		self._server.handle(None, transport)
 
+	def _data_received(self, raw_data):
+		return
+
+	def _connection_lost(self, exc):
+		return
+
+	def _parsebuff(self):
+		if len(self._buffer) >= self._buffer_maxsize:
+			raise Exception('Input data too large!')
+
+		endpos = self._buffer.find('\r\n')
+		if endpos != -1:
+			self._server.handle(self._buffer[:endpos],self._transport)
+			self._buffer = self._buffer[endpos+2:]

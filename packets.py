@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import struct
-from utils3 import *
+from utils import *
 from base64 import b64decode, b64encode
 from odict import OrderedDict
 
