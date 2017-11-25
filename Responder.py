@@ -8,6 +8,7 @@ if __name__ == '__main__':
 	from core import *
 	from servers.FTP import FTP
 	from servers.HTTP import HTTP, HTTPS
+	from servers.SMTP import SMTP
 
 	#### DEBUG ONLY!!
 	os.environ['PYTHONASYNCIODEBUG'] = 'aaaa'
@@ -90,6 +91,8 @@ if __name__ == '__main__':
 	servers.append(httpserver2)
 	httpsserver = Server('', 443, HTTPS, proto = ServerProtocol.SSL, settings = httpssettings)
 	servers.append(httpsserver)
+	smtpserver = Server('', 25, SMTP)
+	servers.append(smtpserver)
 
 	for server in servers:
 		ss = AsyncSocketServer(server, resultQ)
