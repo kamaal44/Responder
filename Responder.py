@@ -9,6 +9,8 @@ if __name__ == '__main__':
 	from servers.FTP import FTP
 	from servers.HTTP import HTTP, HTTPS
 	from servers.SMTP import SMTP
+	from servers.POP3 import POP3, POP3S
+	from servers.IMAP import IMAP, IMAPS
 
 	#### DEBUG ONLY!!
 	os.environ['PYTHONASYNCIODEBUG'] = 'aaaa'
@@ -21,7 +23,8 @@ if __name__ == '__main__':
 
 	logsettings = {
 		'webview' : {
-			'settings_file': '/var/www/responder-webview/config.py',
+		#	'settings_file': '/var/www/responder-webview/config.py',
+			'settings_file': '/home/garage/Desktop/Responder-asyncio/webview_config.py',
 			'useDB':True, 
 			'useWeb':False
 		},
@@ -65,8 +68,10 @@ if __name__ == '__main__':
 
 	sslsettings = {
 		'ciphers'  : 'ALL',
-		'certfile' : '/etc/letsencrypt/live/creds.56k.io/fullchain.pem',
-		'keyfile'  : '/etc/letsencrypt/live/creds.56k.io/privkey.pem'
+		#'certfile' : '/etc/letsencrypt/live/creds.56k.io/fullchain.pem',
+		#'keyfile'  : '/etc/letsencrypt/live/creds.56k.io/privkey.pem'
+		'certfile' : '/home/garage/Desktop/Responder-asyncio/certs/responder.crt',
+		'keyfile'  : '/home/garage/Desktop/Responder-asyncio/certs/responder.key'
 	}
 
 	httpsettings2 = copy.deepcopy(httpsettings)
@@ -74,6 +79,13 @@ if __name__ == '__main__':
 
 	httpssettings = httpsettings
 	httpssettings['SSL'] = sslsettings
+
+	impassettings = {}
+	impassettings['SSL'] = sslsettings
+
+	pop3ssettings = {}
+	pop3ssettings['SSL'] = sslsettings
+
 
 	servers    = []
 	resultQ   = multiprocessing.Queue()
@@ -93,6 +105,14 @@ if __name__ == '__main__':
 	servers.append(httpsserver)
 	smtpserver = Server('', 25, SMTP)
 	servers.append(smtpserver)
+	pop3server = Server('', 110, POP3)
+	servers.append(pop3server)
+	pop3sserver = Server('', 995, POP3S, proto = ServerProtocol.SSL, settings = pop3ssettings)
+	servers.append(pop3sserver)
+	imapserver = Server('', 143, IMAP)
+	servers.append(imapserver)
+	imapsserver = Server('', 993, IMAPS, proto = ServerProtocol.SSL, settings = impassettings)
+	servers.append(imapsserver)
 
 	for server in servers:
 		ss = AsyncSocketServer(server, resultQ)

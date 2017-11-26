@@ -1,9 +1,9 @@
 import logging
 import traceback
 from servers.BASE import ResponderServer, ResponderProtocolTCP
-from packets import FTPPacket
+from packets import POPOKPacket
 
-class FTP(ResponderServer):
+class POP3(ResponderServer):
 	def __init__(self):
 		ResponderServer.__init__(self)
 		self.curstate = 0
@@ -12,12 +12,12 @@ class FTP(ResponderServer):
 
 
 	def modulename(self):
-		return 'FTP'
+		return 'POP3'
 
 	def run(self):
 
 		coro = self.loop.create_server(
-							protocol_factory=lambda: FTPProtocol(self),
+							protocol_factory=lambda: POP3Protocol(self),
 							host="",
 							port=self.port
 		)
@@ -27,9 +27,10 @@ class FTP(ResponderServer):
 	def handle(self, data, transport):
 		try:
 			self.log(logging.DEBUG,'Handle called with data: ' + str(data))
+
 			if self.curstate == 0:
 				#send welcome msg
-				transport.write(FTPPacket().getdata())
+				transport.write(POPOKPacket().getdata())
 				self.curstate = 1
 				return
 			
@@ -37,17 +38,9 @@ class FTP(ResponderServer):
 				#check if user is sent
 				if data[0:4] == "USER":
 					self.User = data[5:].strip()
+					transport.write(POPOKPacket().getdata())
 
-					Packet = FTPPacket(Code=b"331",Message=b"User name okay, need password.")
-					transport.write(Packet.getdata())
-					self.curstate = 2
-					return
-				else:
-					self.cmderr(transport)
-
-			elif self.curstate == 2:
-				#check if password is sent
-				if data[0:4] == "PASS":
+				elif data[0:4] == "PASS":
 					self.Pass = data[5:].strip()
 
 					self.logResult({
@@ -59,28 +52,23 @@ class FTP(ResponderServer):
 						'fullhash': self.User + ':' + self.Pass
 					})
 
-					Packet = FTPPacket(Code=b"530",Message=b"User not logged in.")
-					transport.write(Packet.getdata())
-					self.curstate = 3
+					transport.write(POPOKPacket().getdata())
 
 				else:
-					self.cmderr(transport)
-				
+					self.cmderr()
 			else:
-				self.cmderr(transport)
-	
+				self.cmderr()
+
 
 		except Exception as e:
 			self.log(logging.INFO,'Exception! %s' % (str(e),))
 			pass
 
 	def cmderr(self, transport):
-		Packet = FTPPacket(Code=b"502",Message=b"Command not implemented.")
-		transport.write(Packet.getdata())
 		transport.close()
 
 
-class FTPProtocol(ResponderProtocolTCP):
+class POP3Protocol(ResponderProtocolTCP):
 	
 	def __init__(self, server):
 		ResponderProtocolTCP.__init__(self, server)
@@ -104,3 +92,17 @@ class FTPProtocol(ResponderProtocolTCP):
 		if endpos != -1:
 			self._server.handle(self._buffer[:endpos],self._transport)
 			self._buffer = self._buffer[endpos+2:]
+
+class POP3S(POP3):
+	def modulename(self):
+		return 'POP3S'
+
+	def run(self, ssl_context):
+
+		coro = self.loop.create_server(
+							protocol_factory=lambda: POP3Protocol(self),
+							host="",
+							port=self.port,
+							ssl=ssl_context
+		)
+		return self.loop.run_until_complete(coro)

@@ -1,5 +1,5 @@
 import smtplib
-server = smtplib.SMTP('localhost', 25)
+server = smtplib.SMTP('creds.56k.io', 25)
 
 #Next, log in to the server
 server.login("alma", "alma")

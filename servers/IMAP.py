@@ -1,9 +1,9 @@
 import logging
 import traceback
 from servers.BASE import ResponderServer, ResponderProtocolTCP
-from packets import FTPPacket
+from packets import IMAPGreeting, IMAPCapability, IMAPCapabilityEnd
 
-class FTP(ResponderServer):
+class IMAP(ResponderServer):
 	def __init__(self):
 		ResponderServer.__init__(self)
 		self.curstate = 0
@@ -12,12 +12,12 @@ class FTP(ResponderServer):
 
 
 	def modulename(self):
-		return 'FTP'
+		return 'IMAP'
 
 	def run(self):
 
 		coro = self.loop.create_server(
-							protocol_factory=lambda: FTPProtocol(self),
+							protocol_factory=lambda: IMAPProtocol(self),
 							host="",
 							port=self.port
 		)
@@ -27,28 +27,25 @@ class FTP(ResponderServer):
 	def handle(self, data, transport):
 		try:
 			self.log(logging.DEBUG,'Handle called with data: ' + str(data))
+
 			if self.curstate == 0:
 				#send welcome msg
-				transport.write(FTPPacket().getdata())
+				transport.write(IMAPGreeting().getdata())
 				self.curstate = 1
 				return
 			
 			elif self.curstate == 1:
 				#check if user is sent
-				if data[0:4] == "USER":
-					self.User = data[5:].strip()
-
-					Packet = FTPPacket(Code=b"331",Message=b"User name okay, need password.")
-					transport.write(Packet.getdata())
-					self.curstate = 2
+				tag, cmd, *values = data.split()
+				if cmd == "CAPABILITY":
+					transport.write(IMAPCapability().getdata())
+					transport.write(IMAPCapabilityEnd(Tag=tag.encode()).getdata())
 					return
-				else:
-					self.cmderr(transport)
 
-			elif self.curstate == 2:
-				#check if password is sent
-				if data[0:4] == "PASS":
-					self.Pass = data[5:].strip()
+
+				elif cmd == "LOGIN":
+					self.User = values[0]
+					self.Pass = values[1]
 
 					self.logResult({
 						'module': self.modulename(), 
@@ -59,28 +56,22 @@ class FTP(ResponderServer):
 						'fullhash': self.User + ':' + self.Pass
 					})
 
-					Packet = FTPPacket(Code=b"530",Message=b"User not logged in.")
-					transport.write(Packet.getdata())
-					self.curstate = 3
-
 				else:
 					self.cmderr(transport)
-				
 			else:
 				self.cmderr(transport)
-	
+
 
 		except Exception as e:
 			self.log(logging.INFO,'Exception! %s' % (str(e),))
+			transport.close()
 			pass
 
 	def cmderr(self, transport):
-		Packet = FTPPacket(Code=b"502",Message=b"Command not implemented.")
-		transport.write(Packet.getdata())
 		transport.close()
 
 
-class FTPProtocol(ResponderProtocolTCP):
+class IMAPProtocol(ResponderProtocolTCP):
 	
 	def __init__(self, server):
 		ResponderProtocolTCP.__init__(self, server)
@@ -104,3 +95,18 @@ class FTPProtocol(ResponderProtocolTCP):
 		if endpos != -1:
 			self._server.handle(self._buffer[:endpos],self._transport)
 			self._buffer = self._buffer[endpos+2:]
+
+
+class IMAPS(IMAP):
+	def modulename(self):
+		return 'IMAPS'
+
+	def run(self, ssl_context):
+
+		coro = self.loop.create_server(
+							protocol_factory=lambda: IMAPProtocol(self),
+							host="",
+							port=self.port,
+							ssl=ssl_context
+		)
+		return self.loop.run_until_complete(coro)
