@@ -10,6 +10,8 @@ import logging
 import logging.config
 import logging.handlers
 import asyncio
+import requests
+import json
 
 multiprocessing.freeze_support()
 
@@ -90,30 +92,20 @@ class LogProcessor(multiprocessing.Process):
 
 		self.logger = None
 		self.resultHandlers = []
+		self.extensionsQueue = multiprocessing.Queue()
 
 
 	def log(self, level, message):
 		self.handleLog(LogEntry(level, self.name, message))
 
 	def setup(self):
+		logging.config.dictConfig(self.logsettings['log'])
 		self.resultHandlers.append(print)
 		if 'webview' in self.logsettings:
-			os.environ['RESPONDERWEBMIN'] = self.logsettings['webview']['settings_file']
-			if self.logsettings['webview']['useDB'] or self.logsettings['webview']['useWeb']:
-				from responder_webview.responderHandler import ResponderHook
-				webview = ResponderHook()
+			wv = WebViewHandler(self.extensionsQueue, self.resultQ, self.logsettings['webview'])
+			wv.start()
 
-			if self.logsettings['webview']['useDB']:
-				self.resultHandlers.append(webview.savetodb)
-
-			if self.logsettings['webview']['useWeb']:
-				webview.start_webview()
-
-		#TODO do proper log settings
-		#self.logger = logging.getLogger(__name__)
-		#self.logger.setLevel(logging.DEBUG)
-		logging.config.dictConfig(self.logsettings['log'])
-
+	
 	def run(self):
 		self.setup()		
 		self.log(logging.INFO,'setup done')
@@ -130,5 +122,55 @@ class LogProcessor(multiprocessing.Process):
 		logging.log(log.level, str(log))
 
 	def handleResult(self, result):
-		for resultHander in self.resultHandlers:
-			resultHander(result.d)
+		self.extensionsQueue.put(result)
+
+
+class WebViewHandler(threading.Thread):
+	def __init__(self, resQ, logQ, config):
+		threading.Thread.__init__(self)
+		self.sendInterval = 10
+		self.resQ = resQ
+		self.logQ = logQ
+		self.url = config['URL']
+		self.AgentId =  config['AgentId']
+		self.isSSL =  config['SSLAuth']
+		self.SSLServerCert =  config['SSLServerCert']
+		self.SSLClientCert = config['SSLClientCert']
+		self.SSLClientKey =  config['SSLClientKey']
+
+		self.buff = []
+		self.buffLock = threading.Lock()
+
+	def log(self, level, message):
+		self.logQ.put(LogEntry(level, 'WebViewHandler', message))
+
+	def setup(self):
+		threading.Timer(self.sendInterval, self.sendResults).start()
+
+	def run(self):
+		self.setup()
+		self.log(logging.DEBUG,'Started!')
+		while True:
+			result = self.resQ.get()
+			with self.buffLock:
+				res = result.d
+				res['agent_id'] = self.AgentId
+				self.buff.append(res)
+
+	def sendResults(self):
+		self.log(logging.DEBUG,'sendResults called')
+		with self.buffLock:
+			if len(self.buff) > 0:
+				try:
+					self.log(logging.DEBUG,'Sending results to URL')
+					headers = {'content-type': 'application/json'}
+					response = requests.put(self.url, data=json.dumps(self.buff), headers=headers)
+					self.buff = []
+				except Exception as e:
+					self.log(logging.INFO,'Exception! %s' % (str(e),))
+
+		threading.Timer(self.sendInterval, self.sendResults).start()
+
+
+				
+

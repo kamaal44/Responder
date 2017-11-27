@@ -1,119 +1,66 @@
 #!/usr/bin/python3
+import sys
+import atexit
+import copy
+import os
+import time
+from pathlib import Path
+from core import *
+from servers.FTP import FTP
+from servers.HTTP import HTTP, HTTPS
+from servers.SMTP import SMTP
+from servers.POP3 import POP3, POP3S
+from servers.IMAP import IMAP, IMAPS
+import config
 
-if __name__ == '__main__':
-	import copy
-	import os
-	import time
-	from pathlib import Path
-	from core import *
-	from servers.FTP import FTP
-	from servers.HTTP import HTTP, HTTPS
-	from servers.SMTP import SMTP
-	from servers.POP3 import POP3, POP3S
-	from servers.IMAP import IMAP, IMAPS
+def byealex(name_of_pid):
+	pidfile = str(name_of_pid)
+	os.remove(pidfile)
 
-        # systemd stuff
-	import sys, atexit
+def handle_systemd():
+	if os.path.isfile(config.pidfile):
+		print ("%s already exists, exiting" % config.pidfile)
+		sys.exit()
 
+	pid = str(os.getpid())
+	with open(config.pidfile, 'w') as f:
+		f.write(pid)
+	
+	atexit.register(byealex,config.pidfile)
+	
+
+def main(argv):
+	handle_systemd()
 	try:
-		def setpid(name_of_pid):
-			pid = str(os.getpid())
-			pidfile = str(name_of_pid)
-			if os.path.isfile(pidfile):
-				print ("%s already exists, exiting" % pidfile)
-				sys.exit()
-			open(pidfile, 'w').write(pid)
-
-		def byealex(name_of_pid):
-			pidfile = str(name_of_pid)
-			os.remove(pidfile)
-
-		atexit.register(byealex,"/var/run/responder.pid")
-		setpid("/var/run/responder.pid")
-		
 		current_path = Path(__file__)
 		basedir = Path(str(current_path.parents[0]))
 
 		bind_ip = ''
 
-
-		logsettings = {
-			'webview' : {
-				'settings_file': '/var/www/responder-webview/config.py',
-			#	'settings_file': '/home/garage/Desktop/Responder-asyncio/webview_config.py',
-				'useDB':True, 
-				'useWeb':False
-			},
-			'log' : {
-				'version': 1,
-				'formatters': {
-					'detailed': {
-						'class': 'logging.Formatter',
-							'format': '%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s'
-					}
-				},
-				'handlers': {
-					'console': {
-						'class': 'logging.StreamHandler',
-						'level': 'DEBUG',
-					}
-				},
-				'root': {
-					'level': 'DEBUG',
-					'handlers': ['console']
-				}
-			}
-		}
-
-		httpsettings = {
-			'Force_WPAD_Auth': False,
-			'WPAD_Script': '',
-			'NumChal' : "random",
-			'Challenge' : '',
-			'Serve_Always': False,
-			'Serve_Exe': False,
-			'Serve_Html': False,
-			'Html_Filename': '',
-			'Exe_Filename': '',
-			'Exe_DlName': '',
-			'Force_WPAD_Auth': False,
-			'HtmlToInject': 'aaaa',
-			'Basic' : False
-
-		}
-
-		sslsettings = {
-			'ciphers'  : 'ALL',
-			'certfile' : '/etc/letsencrypt/live/creds.56k.io/fullchain.pem',
-			'keyfile'  : '/etc/letsencrypt/live/creds.56k.io/privkey.pem'
-			#'certfile' : '/home/garage/Desktop/Responder-asyncio/certs/responder.crt',
-			#'keyfile'  : '/home/garage/Desktop/Responder-asyncio/certs/responder.key'
-		}
-
-		httpsettings2 = copy.deepcopy(httpsettings)
+		httpsettings2 = copy.deepcopy(config.httpsettings)
 		httpsettings2['Basic'] = True
 
-		httpssettings = httpsettings
-		httpssettings['SSL'] = sslsettings
+		httpssettings = config.httpsettings
+		httpssettings['SSL'] = config.sslsettings
 
 		impassettings = {}
-		impassettings['SSL'] = sslsettings
+		impassettings['SSL'] = config.sslsettings
 
 		pop3ssettings = {}
-		pop3ssettings['SSL'] = sslsettings
+		pop3ssettings['SSL'] = config.sslsettings
 
 
 		servers    = []
 		resultQ   = multiprocessing.Queue()
 		stopEvent = multiprocessing.Event()
 
-		lp = LogProcessor(logsettings, resultQ, stopEvent)
+		lp = LogProcessor(config.logsettings, resultQ, stopEvent)
 		lp.daemon = True
 		lp.start()
 		
 		ftpserver = Server('', 21, FTP)
 		servers.append(ftpserver)
-		httpserver = Server('', 80, HTTP, settings = httpsettings)
+		httpserver = Server('', 80, HTTP, settings = config.httpsettings)
 		servers.append(httpserver)
 		httpserver2 = Server('', 81, HTTP, settings = httpsettings2)
 		servers.append(httpserver2)
@@ -140,3 +87,7 @@ if __name__ == '__main__':
 
 	except KeyboardInterrupt:
 		sys.exit(0)
+
+
+if __name__ == '__main__':
+	main(sys.argv)
