@@ -1,3 +1,9 @@
+# Webview extension
+After you have sucsessfully set up the webview server (https://github.com/skelsec/Responder-WebView) you'll need to adjust the settings in this Responder version.
+In the Responder.conf file you'll find the section "WebView extension".
+URL should point to your web URL but keep the '/result' at the end (that defines the API endpoint)
+
+
 # Responder/MultiRelay #
 
 LLMNR/NBT-NS/mDNS Poisoner and NTLMv1/2 Relay.
