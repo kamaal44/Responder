@@ -221,16 +221,9 @@ def serve_thread_SSL(host, port, handler):
 	except:
 		print color("[!] ", 1, 1) + "Error starting SSL server on port " + str(port) + ", check permissions or other servers running."
 
-def runweb():
-	os.environ['RESPONDERWEBMIN'] = 'webview_config.py' #full file path is required!!!!
-	from responder_webview.responderHandler import ResponderHook
-	settings.webview = ResponderHook()
-	settings.webview.start_webview()
-
 
 def main():
 	try:
-		runweb()
 		threads = []
 
 		# Load (M)DNS, NBNS and LLMNR Poisoners

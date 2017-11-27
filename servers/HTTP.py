@@ -201,9 +201,11 @@ def PacketSequence(data, client, Challenge):
 
 			Buffer = NTLM_Challenge(ServerChallenge=Challenge)
 			Buffer.calculate()
+			print str(Buffer)
 
 			Buffer_Ans = IIS_NTLM_Challenge_Ans()
 			Buffer_Ans.calculate(str(Buffer))
+			print str(Buffer_Ans)
 			return str(Buffer_Ans)
 
 		if Packet_NTLM == "\x03":

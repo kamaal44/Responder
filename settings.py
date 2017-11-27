@@ -194,6 +194,15 @@ class Settings:
 
 		self.Os_version      = sys.platform
 
+		#WebView options
+		self.WebView_On_Off        = self.toBool(config.get('WebView extension', 'Enable'))
+		self.WebViewURL            = config.get('WebView extension', 'URL')
+		self.WebViewAgentId        = config.get('WebView extension', 'AgentId')
+		self.WebViewSSLAuth_On_Off = self.toBool(config.get('WebView extension', 'SSLAuth'))
+		self.WebViewSSLServerCert  = config.get('WebView extension', 'SSLServerCert')
+		self.WebViewSSLClientCert  = config.get('WebView extension', 'SSLClientCert')
+		self.WebViewSSLClientKey   = config.get('WebView extension', 'SSLClientKey')
+
 		# Set up Challenge
 		self.NumChal = config.get('Responder Core', 'Challenge')
                 if self.NumChal.lower() == 'random':
