@@ -3,6 +3,7 @@ import asyncio
 import logging
 import datetime
 import enum
+import socket
 
 class ConnectionStatus(enum.Enum):
 	OPENED = 0
@@ -21,6 +22,11 @@ class Connection():
 		self.remote_ip, self.remote_port = socket.getpeername()
 		self.local_ip, self.local_port   = socket.getsockname()
 
+		try:
+			self.rdns = socket.gethostbyaddr(self.remote_ip)[0]
+		except Exception as e:
+			pass
+			
 	def getremoteaddr(self):
 		return (self.remote_ip, self.remote_port)
 
