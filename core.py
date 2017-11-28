@@ -14,7 +14,7 @@ import requests
 import json
 from copy import deepcopy
 import datetime
-import ipaddress
+
 
 multiprocessing.freeze_support()
 
@@ -185,7 +185,7 @@ class WebViewHandler(threading.Thread):
 
 
 	def sendConnections(self):
-		self.log(logging.DEBUG,'sendConnections called')
+		#self.log(logging.DEBUG,'sendConnections called')
 		if len(self.conbuff) > 0:
 			package = {}
 			package['agent_id'] = self.AgentId
@@ -204,7 +204,7 @@ class WebViewHandler(threading.Thread):
 
 
 	def sendResults(self):
-		self.log(logging.DEBUG,'sendResults called')
+		#self.log(logging.DEBUG,'sendResults called')
 		if len(self.resbuff) > 0:
 			tempbuff = None
 			with self.resbuffLock:
