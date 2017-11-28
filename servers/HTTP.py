@@ -166,7 +166,7 @@ class HTTP(ResponderServer):
 		return 'HTTP'
 
 	def handle(self, request, transport):
-		self.log(logging.DEBUG, 'Handling request %s' % str(request))
+		#self.log(logging.DEBUG, 'Handling request %s' % str(request))
 
 		try:
 			if request.isWpad:
@@ -183,7 +183,7 @@ class HTTP(ResponderServer):
 					return
 			else:
 				Buffer = self.PacketSequence(request, transport)
-				self.log(logging.DEBUG, 'Response: ' + Buffer.decode())
+				#self.log(logging.DEBUG, 'Response: ' + Buffer.decode())
 				transport.write(Buffer)
 				return
 
@@ -245,7 +245,6 @@ class HTTP(ResponderServer):
 					#Buffer = NTLM_Challenge(ServerChallenge=self.challenge, TargetNameStr = b'SMB', Av3Str=b'56k.io', Av4Str=b'creds.56k.io',Av5Str=b'56k.io')
 					Buffer = NTLM_Challenge(ServerChallenge=self.challenge)
 					Buffer.calculate()
-					print(repr(Buffer.getdata()))
 
 					Buffer_Ans = IIS_NTLM_Challenge_Ans()
 					Buffer_Ans.calculate(Buffer.getdata())

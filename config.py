@@ -2,7 +2,7 @@ pidfile = "/var/run/responder.pid"
 
 logsettings = {
 	'webview' : {
-		'URL':'http://localhost:8081/result/',
+		'URL':'http://localhost:8081',
 		'AgentId' : 'localagent',
 		'SSLAuth' : False,
 		'SSLServerCert' : '',

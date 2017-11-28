@@ -1,6 +1,43 @@
 from abc import ABC, abstractmethod
 import asyncio
 import logging
+import datetime
+import enum
+
+class ConnectionStatus(enum.Enum):
+	OPENED = 0
+	CLOSED = 1
+
+class Connection():
+	def __init__(self, socket, status):
+		self.status      = status
+		self.rdns        = ''
+		self.remote_ip   = ''
+		self.remote_port = ''
+		self.local_ip    = ''
+		self.local_port  = ''
+		self.timestamp   = datetime.datetime.utcnow()
+
+		self.remote_ip, self.remote_port = socket.getpeername()
+		self.local_ip, self.local_port   = socket.getsockname()
+
+	def getremoteaddr(self):
+		return (self.remote_ip, self.remote_port)
+
+	def toDict(self):
+		t = {}
+		t['status'] = self.status
+		t['rdns'] = self.rdns
+		t['remote_ip'] = self.remote_ip
+		t['remote_port'] = self.remote_port
+		t['local_ip'] = self.local_ip
+		t['local_port'] = self.local_port
+		t['timestamp'] = self.timestamp
+		return t
+
+	def __str__(self):
+		return '[%s] %s:%d -> %s:%d' % (self.timestamp.isoformat(), self.remote_ip, self.remote_port, self.local_ip,self.local_port )
+
 
 class Result():
 	def __init__(self,d):
@@ -25,6 +62,7 @@ class ResponderServer(ABC):
 		self.peerport = None
 
 	def setup(self, port, loop, logQ, settings = None):
+
 		self.port  = port
 		self.loop  = loop
 		self.logQ = logQ
@@ -39,6 +77,9 @@ class ResponderServer(ABC):
 
 	def logResult(self, resultd):
 		self.logQ.put(Result(resultd))
+
+	def logConnection(self, conn):
+		self.logQ.put(conn)
 
 	@abstractmethod
 	def modulename(self):
@@ -55,6 +96,7 @@ class ResponderProtocolTCP(asyncio.Protocol):
 	def __init__(self, server):
 		asyncio.Protocol.__init__(self)
 		self._server = server
+		self._con = None
 		self._buffer_maxsize = 10*1024
 		self._request_data_size = self._buffer_maxsize
 		self._transport = None
@@ -62,7 +104,9 @@ class ResponderProtocolTCP(asyncio.Protocol):
 
 
 	def connection_made(self, transport):
-		self._server.peername, self._server.peerport = transport.get_extra_info('peername')
+		self._con = Connection(transport.get_extra_info('socket'), ConnectionStatus.OPENED)
+		self._server.logConnection(self._con)
+		self._server.peername, self._server.peerport = self._con.getremoteaddr()
 		self._server.log(logging.INFO, 'New connection opened')
 		self._transport = transport
 		self._connection_made(transport)
@@ -78,6 +122,8 @@ class ResponderProtocolTCP(asyncio.Protocol):
 			self._parsebuff()
 
 	def connection_lost(self, exc):
+		self._con.status = ConnectionStatus.OPENED
+		self._server.logConnection(self._con)
 		self._server.log(logging.INFO, 'Connection closed')
 		self._connection_lost(exc)
 

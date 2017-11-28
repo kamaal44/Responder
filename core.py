@@ -1,4 +1,4 @@
-from servers.BASE import ResponderServer, Result, LogEntry
+from servers.BASE import ResponderServer, Result, LogEntry, Connection
 import os
 import ssl
 import socket
@@ -12,6 +12,9 @@ import logging.handlers
 import asyncio
 import requests
 import json
+from copy import deepcopy
+import datetime
+import ipaddress
 
 multiprocessing.freeze_support()
 
@@ -115,11 +118,17 @@ class LogProcessor(multiprocessing.Process):
 				self.handleResult(resultObj)
 			elif isinstance(resultObj, LogEntry):
 				self.handleLog(resultObj)
+			elif isinstance(resultObj, Connection):
+				self.handleConnection(resultObj)
 			else:
 				raise Exception('Unknown object in queue!')
 
 	def handleLog(self, log):
 		logging.log(log.level, str(log))
+
+	def handleConnection(self, con):
+		logging.log(logging.INFO, str(con))
+		self.extensionsQueue.put(con)
 
 	def handleResult(self, result):
 		self.extensionsQueue.put(result)
@@ -132,45 +141,114 @@ class WebViewHandler(threading.Thread):
 		self.resQ = resQ
 		self.logQ = logQ
 		self.url = config['URL']
+		self.connectionEndpoint = '/connection/'
+		self.resultsEndpoint    = '/result/'
 		self.AgentId =  config['AgentId']
 		self.isSSL =  config['SSLAuth']
 		self.SSLServerCert =  config['SSLServerCert']
-		self.SSLClientCert = config['SSLClientCert']
-		self.SSLClientKey =  config['SSLClientKey']
+		self.SSLClientCert =  config['SSLClientCert']
+		self.SSLClientKey  =  config['SSLClientKey']
 
-		self.buff = []
-		self.buffLock = threading.Lock()
+		self.resbuff = []
+		self.resbuffLock = threading.Lock()
+
+		self.conbuff = []
+		self.conbuffLock = threading.Lock()
 
 	def log(self, level, message):
 		self.logQ.put(LogEntry(level, 'WebViewHandler', message))
 
 	def setup(self):
-		threading.Timer(self.sendInterval, self.sendResults).start()
+		t = threading.Timer(self.sendInterval, self.sendResults)
+		t.daemon = True
+		t.start()
+		t = threading.Timer(self.sendInterval, self.sendConnections)
+		t.daemon = True
+		t.start()
 
 	def run(self):
 		self.setup()
 		self.log(logging.DEBUG,'Started!')
 		while True:
-			result = self.resQ.get()
-			with self.buffLock:
-				res = result.d
-				res['agent_id'] = self.AgentId
-				self.buff.append(res)
+			resultObj = self.resQ.get()
+			if isinstance(resultObj, Result):
+				with self.resbuffLock:
+					res = resultObj.d
+					res['agent_id'] = self.AgentId
+					self.resbuff.append(res)
+			elif isinstance(resultObj, Connection):
+				with self.conbuffLock:
+					self.conbuff.append(resultObj.toDict())
+
+			else:
+				raise Exception('Unknown object in queue!')
+
+
+	def sendConnections(self):
+		self.log(logging.DEBUG,'sendConnections called')
+		if len(self.conbuff) > 0:
+			package = {}
+			package['agent_id'] = self.AgentId
+			package['connections'] = None
+			with self.conbuffLock:
+				package['connections'] = deepcopy(self.conbuff)
+				self.conbuff = []
+
+
+			t1 = threading.Thread(target = self.sendtoAPI, args = (package,self.connectionEndpoint))
+			t1.daemon = True
+			t1.start()
+				
+
+		threading.Timer(self.sendInterval, self.sendConnections).start()
+
 
 	def sendResults(self):
 		self.log(logging.DEBUG,'sendResults called')
-		with self.buffLock:
-			if len(self.buff) > 0:
-				try:
-					self.log(logging.DEBUG,'Sending results to URL')
-					headers = {'content-type': 'application/json'}
-					response = requests.put(self.url, data=json.dumps(self.buff), headers=headers)
-					self.buff = []
-				except Exception as e:
-					self.log(logging.INFO,'Exception! %s' % (str(e),))
+		if len(self.resbuff) > 0:
+			tempbuff = None
+			with self.resbuffLock:
+				tempbuff = deepcopy(self.resbuff)
+				self.resbuff = []
+
+			t1 = threading.Thread(target = self.sendtoAPI, args = (tempbuff,self.resultsEndpoint))
+			t1.daemon = True
+			t1.start()
+				
 
 		threading.Timer(self.sendInterval, self.sendResults).start()
 
 
+	def sendtoAPI(self, data, endpoint):
+		try:
+			self.log(logging.DEBUG,'Sending results to URL')
+			headers = {'content-type': 'application/json'}
+			#processing SSL client auth
+			if self.url[:5].lower() == 'https' and self.isSSL:
+				if self.SSLServerCert == False:
+					self.log(logging.WARNING,'SSL client certificate enabled, but server cert verification disabled. I also like to live dangerously.')
+				
+				response = requests.put(self.url+endpoint, 
+										data=json.dumps(data, cls = UniversalEncoder), 
+										headers=headers,
+										cert=(self.SSLClientCert, self.SSLClientKey),
+										verify=self.SSLServerCert
+										)
+			#just upload wihout cert
+			else:		
+				response = requests.put(self.url+endpoint, 
+										data=json.dumps(data, cls = UniversalEncoder), 
+										headers=headers)
+		except Exception as e:
+			self.log(logging.INFO,'Exception! %s' % (str(e),))
+
 				
 
+class UniversalEncoder(json.JSONEncoder):
+	def default(self, obj):
+		if isinstance(obj, datetime.datetime):
+			return obj.isoformat()
+		elif isinstance(obj, enum.Enum):
+			return obj.value
+		else:
+			return json.JSONEncoder.default(self, obj)
