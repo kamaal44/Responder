@@ -10,7 +10,7 @@ class ConnectionStatus(enum.Enum):
 	CLOSED = 1
 
 class Connection():
-	def __init__(self, soc, status):
+	def __init__(self, soc, status, rdnsd):
 		self.status      = status
 		self.rdns        = ''
 		self.remote_ip   = ''
@@ -22,23 +22,30 @@ class Connection():
 		self.remote_ip, self.remote_port = soc.getpeername()
 		self.local_ip, self.local_port   = soc.getsockname()
 
-		try:
-			self.rdns = socket.gethostbyaddr(self.remote_ip)[0]
-		except Exception as e:
-			pass
+		if self.remote_ip in rdnsd:
+			self.rdns = rdnsd[self.remote_ip]
+		
+		else:
+			try:
+				self.rdns = socket.gethostbyaddr(self.remote_ip)[0]
+			except Exception as e:
+				pass
+
+			rdnsd[self.remote_ip] = self.rdns
+
 
 	def getremoteaddr(self):
 		return (self.remote_ip, self.remote_port)
 
 	def toDict(self):
 		t = {}
-		t['status'] = self.status
-		t['rdns'] = self.rdns
-		t['remote_ip'] = self.remote_ip
+		t['status']      = self.status
+		t['rdns']        = self.rdns
+		t['remote_ip']   = self.remote_ip
 		t['remote_port'] = self.remote_port
-		t['local_ip'] = self.local_ip
-		t['local_port'] = self.local_port
-		t['timestamp'] = self.timestamp
+		t['local_ip']    = self.local_ip
+		t['local_port']  = self.local_port
+		t['timestamp']   = self.timestamp
 		return t
 
 	def __str__(self):
@@ -69,13 +76,15 @@ class ResponderServer(ABC):
 		self.settings = None
 		self.peername = None #this is set when a connection is made!
 		self.peerport = None
+		self.rdnsd    = None
 
-	def setup(self, port, loop, logQ, settings = None):
+	def setup(self, server, loop, logQ):
 
-		self.port  = port
-		self.loop  = loop
-		self.logQ = logQ
-		self.settings = settings
+		self.port     = server.bind_port
+		self.loop     = loop
+		self.logQ     = logQ
+		self.settings = server.settings
+		self.rdnsd    = server.rdnsd
 
 	def log(self, level, message):
 		if self.peername == None:
@@ -99,7 +108,6 @@ class ResponderServer(ABC):
 		pass
 
 
-
 class ResponderProtocolTCP(asyncio.Protocol):
 	
 	def __init__(self, server):
@@ -113,7 +121,7 @@ class ResponderProtocolTCP(asyncio.Protocol):
 
 
 	def connection_made(self, transport):
-		self._con = Connection(transport.get_extra_info('socket'), ConnectionStatus.OPENED)
+		self._con = Connection(transport.get_extra_info('socket'), ConnectionStatus.OPENED, self._server.rdnsd)
 		self._server.logConnection(self._con)
 		self._server.peername, self._server.peerport = self._con.getremoteaddr()
 		self._server.log(logging.INFO, 'New connection opened')

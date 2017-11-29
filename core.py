@@ -28,12 +28,13 @@ class ServerProtocol(enum.Enum):
 	SSL = 2
 
 class Server():
-	def __init__(self, ip, port, handler, proto = ServerProtocol.TCP, settings = None):
+	def __init__(self, ip, port, handler, rdnsd, proto = ServerProtocol.TCP, settings = None):
 		self.bind_addr = ip
 		self.bind_port = port
 		self.proto     = proto
 		self.handler   = handler
 		self.settings  = settings
+		self.rdnsd     = rdnsd
 
 	def getaddr(self):
 		return ((self.bind_addr, self.bind_port))
@@ -60,12 +61,12 @@ class AsyncSocketServer(multiprocessing.Process):
 		self.loop = asyncio.get_event_loop()
 		if self.server.proto == ServerProtocol.TCP:
 			s = self.server.handler()
-			s.setup(self.server.bind_port, self.loop, self.resultQ, self.server.settings)
+			s.setup(self.server, self.loop, self.resultQ)
 			s.run()
 		elif self.server.proto == ServerProtocol.SSL:
 			context = self.create_ssl_context()
 			s = self.server.handler()
-			s.setup(self.server.bind_port, self.loop, self.resultQ, self.server.settings)
+			s.setup(self.server, self.loop, self.resultQ)
 			s.run(context)
 		else:
 			raise Exception('Protocol not implemented!')

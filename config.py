@@ -2,7 +2,8 @@ pidfile = "/var/run/responder.pid"
 
 logsettings = {
 	'webview' : {
-		'URL':'https://creds.56k.io:8081',
+		#'URL':'https://creds.56k.io:8081',
+		'URL':'http://localhost:8081',
 		'AgentId' : 'localagent',
 		'SSLAuth' : False,
 		'SSLServerCert' : '',
@@ -49,8 +50,8 @@ httpsettings = {
 
 sslsettings = {
 	'ciphers'  : 'ALL',
-	'certfile' : '/etc/letsencrypt/live/creds.56k.io/fullchain.pem',
-	'keyfile'  : '/etc/letsencrypt/live/creds.56k.io/privkey.pem'
-	#'certfile' : '/home/garage/Desktop/Responder-asyncio/certs/responder.crt',
-	#'keyfile'  : '/home/garage/Desktop/Responder-asyncio/certs/responder.key'
+	#'certfile' : '/etc/letsencrypt/live/creds.56k.io/fullchain.pem',
+	#'keyfile'  : '/etc/letsencrypt/live/creds.56k.io/privkey.pem'
+	'certfile' : '/home/garage/Desktop/Responder-asyncio/certs/responder.crt',
+	'keyfile'  : '/home/garage/Desktop/Responder-asyncio/certs/responder.key'
 }

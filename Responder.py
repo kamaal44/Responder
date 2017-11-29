@@ -4,6 +4,7 @@ import atexit
 import copy
 import os
 import time
+from multiprocessing import Manager
 from pathlib import Path
 from core import *
 from servers.FTP import FTP
@@ -32,6 +33,8 @@ def handle_systemd():
 def main(argv):
 	handle_systemd()
 	try:
+		manager = Manager() 
+		rdnsd   = manager.dict() #shared dictionary across all processes to speed up rdns resolution
 		current_path = Path(__file__)
 		basedir = Path(str(current_path.parents[0]))
 
@@ -58,23 +61,23 @@ def main(argv):
 		lp.daemon = True
 		lp.start()
 		
-		ftpserver = Server('', 21, FTP)
+		ftpserver = Server('', 21, FTP, rdnsd)
 		servers.append(ftpserver)
-		httpserver = Server('', 80, HTTP, settings = config.httpsettings)
+		httpserver = Server('', 80, HTTP, rdnsd, settings = config.httpsettings)
 		servers.append(httpserver)
-		httpserver2 = Server('', 81, HTTP, settings = httpsettings2)
+		httpserver2 = Server('', 81, HTTP, rdnsd, settings = httpsettings2)
 		servers.append(httpserver2)
-		httpsserver = Server('', 443, HTTPS, proto = ServerProtocol.SSL, settings = httpssettings)
+		httpsserver = Server('', 443, HTTPS, rdnsd, proto = ServerProtocol.SSL, settings = httpssettings)
 		servers.append(httpsserver)
-		smtpserver = Server('', 25, SMTP)
+		smtpserver = Server('', 25, SMTP, rdnsd)
 		servers.append(smtpserver)
-		pop3server = Server('', 110, POP3)
+		pop3server = Server('', 110, POP3, rdnsd)
 		servers.append(pop3server)
-		pop3sserver = Server('', 995, POP3S, proto = ServerProtocol.SSL, settings = pop3ssettings)
+		pop3sserver = Server('', 995, POP3S, rdnsd, proto = ServerProtocol.SSL, settings = pop3ssettings)
 		servers.append(pop3sserver)
-		imapserver = Server('', 143, IMAP)
+		imapserver = Server('', 143, IMAP, rdnsd)
 		servers.append(imapserver)
-		imapsserver = Server('', 993, IMAPS, proto = ServerProtocol.SSL, settings = impassettings)
+		imapsserver = Server('', 993, IMAPS, rdnsd, proto = ServerProtocol.SSL, settings = impassettings)
 		servers.append(imapsserver)
 
 		for server in servers:
