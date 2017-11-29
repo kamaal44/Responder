@@ -10,7 +10,7 @@ class ConnectionStatus(enum.Enum):
 	CLOSED = 1
 
 class Connection():
-	def __init__(self, socket, status):
+	def __init__(self, soc, status):
 		self.status      = status
 		self.rdns        = ''
 		self.remote_ip   = ''
@@ -19,14 +19,14 @@ class Connection():
 		self.local_port  = ''
 		self.timestamp   = datetime.datetime.utcnow()
 
-		self.remote_ip, self.remote_port = socket.getpeername()
-		self.local_ip, self.local_port   = socket.getsockname()
+		self.remote_ip, self.remote_port = soc.getpeername()
+		self.local_ip, self.local_port   = soc.getsockname()
 
 		try:
 			self.rdns = socket.gethostbyaddr(self.remote_ip)[0]
 		except Exception as e:
 			pass
-			
+
 	def getremoteaddr(self):
 		return (self.remote_ip, self.remote_port)
 
@@ -42,7 +42,10 @@ class Connection():
 		return t
 
 	def __str__(self):
-		return '[%s] %s:%d -> %s:%d' % (self.timestamp.isoformat(), self.remote_ip, self.remote_port, self.local_ip,self.local_port )
+		if self.rdns != '':
+			return '[%s] %s:%d -> %s:%d' % (self.timestamp.isoformat(), self.rdns, self.remote_port, self.local_ip,self.local_port )
+		else:
+			return '[%s] %s:%d -> %s:%d' % (self.timestamp.isoformat(), self.remote_ip, self.remote_port, self.local_ip,self.local_port )
 
 
 class Result():
@@ -120,15 +123,14 @@ class ResponderProtocolTCP(asyncio.Protocol):
 	def data_received(self, raw_data):
 		try:
 			data = raw_data.decode('utf-8')
-		except UnicodeDecodeError as e:
-			self._transport._write(str(e).encode('utf-8'))
-		
+		except Exception as e:
+			self._server.log(logging.INFO, 'Data reception failed! Reason: %s' % str(e))
 		else:
 			self._buffer += data
 			self._parsebuff()
 
 	def connection_lost(self, exc):
-		self._con.status = ConnectionStatus.OPENED
+		self._con.status = ConnectionStatus.CLOSED
 		self._server.logConnection(self._con)
 		self._server.log(logging.INFO, 'Connection closed')
 		self._connection_lost(exc)
